@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
+import { register as registerUser } from '../../lib/authStore';
 import {
     Dimensions,
     ImageBackground,
@@ -30,6 +31,9 @@ export default function RegisterScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   // Dynamic colors mapping based on system device theme
   const theme = {
@@ -54,9 +58,56 @@ export default function RegisterScreen() {
     console.log('Continue with Facebook');
   };
 
-  const handleRegister = () => {
-    if (fullName.trim() && email.trim() && password.trim()) {
-      router.replace('./(tabs)');
+  // Password policy: 8-12 characters with an uppercase letter, a number, and a special character.
+  const validatePassword = (value: string): string | null => {
+    if (value.length < 8 || value.length > 12) {
+      return 'Password must be 8 to 12 characters long.';
+    }
+    if (!/[A-Z]/.test(value)) {
+      return 'Password must include at least one uppercase letter.';
+    }
+    if (!/[0-9]/.test(value)) {
+      return 'Password must include at least one number.';
+    }
+    if (!/[^A-Za-z0-9]/.test(value)) {
+      return 'Password must include at least one special character.';
+    }
+    return null;
+  };
+
+  const handleRegister = async () => {
+    setError('');
+
+    if (!fullName.trim() || !email.trim() || !password.trim() || !confirmPassword.trim()) {
+      setError('Please fill in all fields.');
+      return;
+    }
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    if (!agreedToTerms) {
+      setError('Please accept the Terms of Service and Privacy Policy.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await registerUser(fullName.trim(), email.trim(), password);
+      // Account created in the database — send the user to the login screen.
+      router.replace('/(auth)/login');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Registration failed. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -193,17 +244,50 @@ export default function RegisterScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Terms */}
-          <Text style={[styles.termsText, { color: theme.textSub }]}>
-            By registering, you agree to our{' '}
-            <Text style={[styles.termsLink, { color: theme.accent }]}>Terms of Service</Text>
-            {' '}and{' '}
-            <Text style={[styles.termsLink, { color: theme.accent }]}>Privacy Policy</Text>.
+          {/* Password requirements hint */}
+          <Text style={[styles.hintText, { color: theme.textSub }]}>
+            Password must be 8–12 characters and include an uppercase letter, a number, and a special character.
           </Text>
 
+          {/* Inline error message */}
+          {error ? (
+            <View style={styles.errorRow}>
+              <Ionicons name="alert-circle-outline" size={16} color="#EF4444" style={{ marginRight: 6 }} />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
+
+          {/* Terms & Privacy checkbox */}
+          <TouchableOpacity
+            style={styles.termsRow}
+            onPress={() => setAgreedToTerms(!agreedToTerms)}
+            activeOpacity={0.7}
+          >
+            <View
+              style={[
+                styles.checkbox,
+                { borderColor: agreedToTerms ? theme.accent : theme.textSub },
+                agreedToTerms && { backgroundColor: theme.accent },
+              ]}
+            >
+              {agreedToTerms && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
+            </View>
+            <Text style={[styles.termsText, { color: theme.textSub }]}>
+              I agree to the{' '}
+              <Text style={[styles.termsLink, { color: theme.accent }]}>Terms of Service</Text>
+              {' '}and{' '}
+              <Text style={[styles.termsLink, { color: theme.accent }]}>Privacy Policy</Text>.
+            </Text>
+          </TouchableOpacity>
+
           {/* Create Account Button */}
-          <TouchableOpacity style={[styles.createButton, { backgroundColor: theme.accent }]} onPress={handleRegister} activeOpacity={0.85}>
-            <Text style={styles.createButtonText}>Create Account</Text>
+          <TouchableOpacity
+            style={[styles.createButton, { backgroundColor: theme.accent }, submitting && { opacity: 0.6 }]}
+            onPress={handleRegister}
+            activeOpacity={0.85}
+            disabled={submitting}
+          >
+            <Text style={styles.createButtonText}>{submitting ? 'Creating...' : 'Create Account'}</Text>
           </TouchableOpacity>
 
           {/* Login redirect */}
@@ -350,11 +434,46 @@ const styles = StyleSheet.create({
     padding: 0,
   },
 
-  // Terms
-  termsText: {
+  // Password hint
+  hintText: {
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+
+  // Inline error
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  errorText: {
+    flex: 1,
+    color: '#EF4444',
     fontSize: 12,
-    textAlign: 'center',
+    fontWeight: '600',
+  },
+
+  // Terms
+  termsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     marginVertical: 14,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    marginTop: 1,
+  },
+  termsText: {
+    flex: 1,
+    fontSize: 12,
     lineHeight: 18,
   },
   termsLink: {

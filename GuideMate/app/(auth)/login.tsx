@@ -1,6 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import HumanVerification from '../../components/HumanVerification';
+import { hasBiometricLogin, login as loginUser, loginWithBiometrics } from '../../lib/authStore';
+import { getSavedName } from '../../lib/biometric';
 import {
     Dimensions,
     ImageBackground,
@@ -27,6 +30,11 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [savedName, setSavedName] = useState('');
 
   // Dynamic colors mapping based on system device theme
   const theme = {
@@ -39,13 +47,61 @@ export default function LoginScreen() {
     accent: '#22C55E', // Premium Green brand color
   };
 
+  // Offer fingerprint login when the user previously saved their account.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const ok = await hasBiometricLogin();
+      if (!active) return;
+      setBioAvailable(ok);
+      if (ok) {
+        const name = await getSavedName();
+        if (active && name) setSavedName(name);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleBiometricLogin = async () => {
+    setError('');
+    setSubmitting(true);
+    try {
+      await loginWithBiometrics();
+      router.replace('/(tabs)');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Fingerprint login failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleClose = () => {
     router.replace('/(tabs)');
   };
 
-  const handleLogin = () => {
-    if (email.trim() && password.trim()) {
+  const handleLogin = async () => {
+    setError('');
+
+    if (!email.trim() || !password.trim()) {
+      setError('Please enter your email and password.');
+      return;
+    }
+
+    if (!verified) {
+      setError('Please complete the "Verify you are human" check.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await loginUser(email.trim(), password);
       router.replace('/(tabs)');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Login failed. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -104,6 +160,29 @@ export default function LoginScreen() {
         >
           <Text style={[styles.sectionLabel, { color: theme.textMain }]}>Log In</Text>
 
+          {/* Fingerprint quick login (only when an account is saved on device) */}
+          {bioAvailable ? (
+            <>
+              <TouchableOpacity
+                style={[styles.bioButton, { borderColor: theme.accent }, submitting && { opacity: 0.6 }]}
+                onPress={handleBiometricLogin}
+                activeOpacity={0.85}
+                disabled={submitting}
+              >
+                <Ionicons name="finger-print" size={22} color={theme.accent} style={{ marginRight: 10 }} />
+                <Text style={[styles.bioButtonText, { color: theme.accent }]}>
+                  {savedName ? `Log in as ${savedName}` : 'Log in with fingerprint'}
+                </Text>
+              </TouchableOpacity>
+
+              <View style={styles.dividerRow}>
+                <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
+                <Text style={[styles.dividerText, { color: theme.textSub }]}>or use password</Text>
+                <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
+              </View>
+            </>
+          ) : null}
+
           {/* Email Wrapper */}
           <View style={[styles.inputWrapper, { backgroundColor: theme.inputBg }]}>
             <Ionicons name="mail-outline" size={18} color={theme.placeholderColor} style={styles.inputIcon} />
@@ -140,9 +219,25 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Human verification (Cloudflare-style) */}
+          <HumanVerification isDark={isDark} onVerifiedChange={setVerified} />
+
+          {/* Inline error message */}
+          {error ? (
+            <View style={styles.errorRow}>
+              <Ionicons name="alert-circle-outline" size={16} color="#EF4444" style={{ marginRight: 6 }} />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
+
           {/* Action Button */}
-          <TouchableOpacity style={[styles.loginButton, { backgroundColor: theme.accent }]} onPress={handleLogin} activeOpacity={0.85}>
-            <Text style={styles.loginButtonText}>Login</Text>
+          <TouchableOpacity
+            style={[styles.loginButton, { backgroundColor: theme.accent }, submitting && { opacity: 0.6 }]}
+            onPress={handleLogin}
+            activeOpacity={0.85}
+            disabled={submitting}
+          >
+            <Text style={styles.loginButtonText}>{submitting ? 'Signing in...' : 'Login'}</Text>
           </TouchableOpacity>
 
           {/* Forgot Button */}
@@ -261,6 +356,31 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     padding: 0,
+  },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  errorText: {
+    flex: 1,
+    color: '#EF4444',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  bioButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 50,
+    borderWidth: 1.5,
+    paddingVertical: 14,
+    marginBottom: 16,
+  },
+  bioButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
   loginButton: {
     borderRadius: 50,
