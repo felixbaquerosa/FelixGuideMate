@@ -1,52 +1,98 @@
-import React from 'react';
-import { SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
+import React, { useState } from 'react';
+import { Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Chip, ScreenTitle } from '../../components/ui';
+import { useTheme } from '../../lib/theme';
+import { VOUCHERS, formatVoucherMinimum } from '../../lib/vouchers';
 
-const promoCodes = [
-  { code: '6% off', minSpend: 'Min. spend: PHP 8,000', description: 'Sitewide' },
-  { code: 'Others', description: 'More promo codes coming soon' },
-];
+const LOCATIONS = ['Philippines'];
 
 export default function SaleScreen() {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { colors, isDark, radius, shadow, gradients } = useTheme();
+  const [location, setLocation] = useState('Philippines');
 
-  const theme = {
-    bg: isDark ? '#111114' : '#F8F9FA',
-    cardBg: isDark ? '#1E2029' : '#FFFFFF',
-    textMain: isDark ? '#FFFFFF' : '#1A202C',
-    textSub: isDark ? '#9CA3AF' : '#6B7280',
-    accent: '#22C55E',
-    border: isDark ? '#2A2D38' : '#E5E5E5',
+  const promos = location === 'Philippines' ? VOUCHERS : [];
+
+  const redeem = (promo: (typeof VOUCHERS)[number]) => {
+    Alert.alert(
+      `Voucher ready`,
+      `Use code ${promo.code} at checkout. The discount will be applied automatically when you enter it.`,
+      [
+        { text: 'Browse deals', onPress: () => router.push('/things-to-do') },
+        { text: 'Got it', style: 'cancel' },
+      ]
+    );
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={theme.bg} />
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
-        <Text style={[styles.header, { color: theme.textMain }]}>Deals</Text>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bgAlt }]} edges={['left', 'right']}>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16, paddingBottom: 32 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <ScreenTitle title="Deals & Offers" subtitle="Save more on your next adventure" />
 
-        <View style={styles.locationRow}>
-          {['Philippines', 'Vietnam', 'South Korea'].map((loc) => (
-            <TouchableOpacity key={loc} style={[styles.locationChip, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-              <Text style={[styles.locationText, { color: theme.textMain }]}>{loc}</Text>
+        {/* Hero promo banner */}
+        <LinearGradient
+          colors={gradients.sunset}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.banner, shadow.md]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.bannerTag}>LIMITED TIME</Text>
+            <Text style={styles.bannerTitle}>Up to 30% OFF{'\n'}Cebu experiences</Text>
+            <TouchableOpacity style={styles.bannerBtn} activeOpacity={0.85} onPress={() => router.push('/things-to-do')}>
+              <Text style={styles.bannerBtnText}>Explore now</Text>
+              <Ionicons name="arrow-forward" size={14} color="#FF5A1F" />
             </TouchableOpacity>
+          </View>
+          <Ionicons name="pricetags" size={74} color="rgba(255,255,255,0.25)" style={styles.bannerIcon} />
+        </LinearGradient>
+
+        {/* Location filter */}
+        <Text style={[styles.sectionLabel, { color: colors.text }]}>Destination</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipRow}>
+          {LOCATIONS.map((loc) => (
+            <Chip key={loc} label={loc} active={location === loc} onPress={() => setLocation(loc)} />
           ))}
-        </View>
+        </ScrollView>
 
-        <Text style={[styles.promoSectionTitle, { color: theme.textMain }]}>Promo codes for Philippines</Text>
-
-        {promoCodes.map((promo, idx) => (
-          <View key={idx} style={[styles.promoCard, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.promoCode, { color: theme.accent }]}>{promo.code}</Text>
-              {promo.minSpend && <Text style={[styles.promoMinSpend, { color: theme.textSub }]}>{promo.minSpend}</Text>}
-              <Text style={[styles.promoDesc, { color: theme.textMain }]}>{promo.description}</Text>
+        {/* Promo cards */}
+        <Text style={[styles.sectionLabel, { color: colors.text }]}>Promo codes for {location}</Text>
+        {promos.map((promo) => (
+          <View
+            key={promo.code}
+            style={[styles.promoCard, { backgroundColor: colors.card, borderColor: colors.border }, shadow.sm]}
+          >
+            <View style={[styles.promoBadge, { backgroundColor: isDark ? colors.cardAlt : '#FFF1EC' }]}>
+              <Text style={[styles.promoBadgeText, { color: colors.accent }]}>{promo.label}</Text>
             </View>
-            {promo.minSpend && (
-              <TouchableOpacity style={[styles.redeemButton, { backgroundColor: theme.accent }]}>
-                <Text style={styles.redeemText}>Redeem</Text>
-              </TouchableOpacity>
-            )}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.promoDesc, { color: colors.text }]}>{promo.description}</Text>
+              <Text style={[styles.promoMeta, { color: colors.textSub }]}>{formatVoucherMinimum(promo.minSpend)}</Text>
+              <View style={styles.promoCodeRow}>
+                <View style={[styles.codePill, { backgroundColor: colors.chipBg, borderColor: colors.border }]}>
+                  <Ionicons name="pricetag" size={11} color={colors.primary} />
+                  <Text style={[styles.codeText, { color: colors.text }]}>{promo.code}</Text>
+                </View>
+                <Text style={[styles.expires, { color: colors.textMute }]}>{promo.expires}</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={[styles.redeemBtn, { backgroundColor: colors.primary, borderRadius: radius.pill }]}
+              activeOpacity={0.85}
+              onPress={() => redeem(promo)}
+            >
+              <Text style={styles.redeemText}>Redeem</Text>
+            </TouchableOpacity>
           </View>
         ))}
       </ScrollView>
@@ -56,17 +102,33 @@ export default function SaleScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollView: { flex: 1 },
-  content: { padding: 20 },
-  header: { fontSize: 28, fontWeight: '800', marginBottom: 20 },
-  locationRow: { flexDirection: 'row', marginBottom: 24 },
-  locationChip: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, marginRight: 10, borderWidth: 1 },
-  locationText: { fontWeight: '600', fontSize: 13 },
-  promoSectionTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12 },
-  promoCard: { borderRadius: 12, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderWidth: 1 },
-  promoCode: { fontSize: 18, fontWeight: '800' },
-  promoMinSpend: { fontSize: 12, marginTop: 4 },
-  promoDesc: { fontSize: 14, marginTop: 4 },
-  redeemButton: { paddingVertical: 8, paddingHorizontal: 20, borderRadius: 30 },
-  redeemText: { color: '#FFFFFF', fontWeight: '700' },
+  banner: { borderRadius: 22, padding: 20, marginTop: 18, marginBottom: 8, flexDirection: 'row', overflow: 'hidden' },
+  bannerTag: { color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  bannerTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '900', marginTop: 8, letterSpacing: -0.5 },
+  bannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 999,
+    marginTop: 16,
+  },
+  bannerBtnText: { color: '#FF5A1F', fontWeight: '800', fontSize: 13 },
+  bannerIcon: { position: 'absolute', right: 10, bottom: 6 },
+  sectionLabel: { fontSize: 16, fontWeight: '800', marginTop: 22, marginBottom: 12, letterSpacing: -0.3 },
+  chipRow: { flexDirection: 'row' },
+  promoCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1 },
+  promoBadge: { width: 58, height: 58, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  promoBadgeText: { fontSize: 13, fontWeight: '900', textAlign: 'center' },
+  promoDesc: { fontSize: 14, fontWeight: '800' },
+  promoMeta: { fontSize: 12, marginTop: 3, fontWeight: '500' },
+  promoCodeRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 8 },
+  codePill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  codeText: { fontSize: 12, fontWeight: '800' },
+  expires: { fontSize: 11, fontWeight: '500' },
+  redeemBtn: { paddingVertical: 9, paddingHorizontal: 16, marginLeft: 10 },
+  redeemText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
 });

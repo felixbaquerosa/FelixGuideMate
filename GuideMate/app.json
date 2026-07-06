@@ -44,7 +44,13 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow GuideMate to use your location to show directions and ETA to your booked destination."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

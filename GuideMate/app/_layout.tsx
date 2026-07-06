@@ -1,17 +1,29 @@
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
+import { useColorScheme } from 'react-native';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
+import * as SystemUI from 'expo-system-ui';
 import { restoreSession } from '../lib/authStore';
 import { PreferencesProvider } from '../lib/preferences';
 
 export default function RootLayout() {
+  const scheme = useColorScheme();
+  const isDark = scheme === 'dark';
+
   // Restore any saved login token at startup so authenticated API calls work.
   useEffect(() => {
     restoreSession();
   }, []);
 
+  useEffect(() => {
+    const backgroundColor = isDark ? '#0B0D12' : '#FFFFFF';
+    SystemUI.setBackgroundColorAsync(backgroundColor);
+  }, [isDark]);
+
   return (
-    <PreferencesProvider>
-      <Stack screenOptions={{ headerShown: false }}>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <PreferencesProvider>
+        <Stack screenOptions={{ headerShown: false }}>
         {/* 1. Point to the individual landing screen entry point */}
         <Stack.Screen name="(auth)/login" />
 
@@ -30,12 +42,33 @@ export default function RootLayout() {
 
         {/* 6. App settings (language, currency, etc.) */}
         <Stack.Screen name="settings" />
+        <Stack.Screen name="login-methods" />
+        <Stack.Screen name="notification-settings" />
+        <Stack.Screen name="feedback" />
+        <Stack.Screen name="my-feedback" />
+        <Stack.Screen name="about" />
 
         {/* 7. Security & biometric screens */}
         <Stack.Screen name="account-security" />
         <Stack.Screen name="change-password" />
         <Stack.Screen name="fingerprint" />
-      </Stack>
-    </PreferencesProvider>
+
+        {/* 8. Messaging + in-app calls */}
+        <Stack.Screen name="messages" />
+        <Stack.Screen name="chat/[id]" />
+        <Stack.Screen name="call/[id]" options={{ presentation: 'fullScreenModal' }} />
+
+        {/* 9. Travel services: vehicle rentals + eSIM */}
+        <Stack.Screen name="car-rentals" />
+        <Stack.Screen name="esim" />
+
+        {/* 10. Emergency SOS */}
+        <Stack.Screen name="sos" />
+
+        {/* 11. Trip navigation map (post-booking) */}
+        <Stack.Screen name="trip-map" />
+        </Stack>
+      </PreferencesProvider>
+    </SafeAreaProvider>
   );
 }

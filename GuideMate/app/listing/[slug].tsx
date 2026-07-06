@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -12,29 +13,46 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    useColorScheme,
     View,
 } from 'react-native';
-import { ApiListing, createBooking, getListing, PaymentMethod, resolveImage } from '../../services/api';
-import { getSession } from '../../lib/authStore';
+import { ApiListing, createBooking, getListing, isUnauthorized, PaymentMethod, resolveImage } from '../../services/api';
+import { clearSession, restoreSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '../../lib/theme';
 import CalendarPicker from '../../components/CalendarPicker';
+import { findVoucher, getVoucherDiscount } from '../../lib/vouchers';
 
 const QR_EWALLET = require('../../assets/images/payment/qr-ewallet.png');
 const QR_INSTAPAY = require('../../assets/images/payment/qr-instapay.png');
 
 type BookingStep = 'details' | 'method' | 'qr' | 'card';
 
+// Selectable start times for an experience (24h values, shown in 12h format).
+const TIME_SLOTS = [
+  '06:00', '07:00', '08:00', '09:00', '10:00', '11:00',
+  '12:00', '13:00', '14:00', '15:00', '16:00', '17:00',
+  '18:00', '19:00', '20:00',
+];
+
+function formatTimeLabel(value: string): string {
+  const [hStr, mStr] = value.split(':');
+  const h = Number(hStr);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${mStr} ${period}`;
+}
+
 export default function ListingDetailScreen() {
   const router = useRouter();
   const { slug } = useLocalSearchParams<{ slug: string }>();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
   const { t, formatPrice } = usePreferences();
   const insets = useSafeAreaInsets();
+  const { colors, gradients } = useTheme();
 
   const [listing, setListing] = useState<ApiListing | null>(null);
+  const [alreadyBooked, setAlreadyBooked] = useState(false);
+  const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -42,6 +60,7 @@ export default function ListingDetailScreen() {
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState<BookingStep>('details');
   const [bookingDate, setBookingDate] = useState('');
+  const [bookingTime, setBookingTime] = useState('');
   const [guests, setGuests] = useState(1);
   const [booking, setBooking] = useState(false);
 
@@ -52,15 +71,18 @@ export default function ListingDetailScreen() {
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvv, setCardCvv] = useState('');
+  const [voucherExpanded, setVoucherExpanded] = useState(false);
+  const [voucherDraft, setVoucherDraft] = useState('');
+  const [voucherCode, setVoucherCode] = useState('');
 
   const theme = {
-    bg: isDark ? '#111114' : '#FFFFFF',
-    card: isDark ? '#1E2029' : '#F8F9FA',
-    border: isDark ? '#2A2D38' : '#EDF2F7',
-    textMain: isDark ? '#FFFFFF' : '#1A202C',
-    textSub: isDark ? '#9CA3AF' : '#718096',
-    accent: '#FF5A1F',
-    inputBg: isDark ? '#1E2029' : '#F1F5F9',
+    bg: colors.bg,
+    card: colors.cardAlt,
+    border: colors.border,
+    textMain: colors.text,
+    textSub: colors.textSub,
+    accent: colors.primary,
+    inputBg: colors.chipBg,
   };
 
   const load = useCallback(async () => {
@@ -69,6 +91,8 @@ export default function ListingDetailScreen() {
     try {
       const data = await getListing(String(slug));
       setListing(data.listing);
+      setAlreadyBooked(!!data.already_booked);
+      setBookedSlots(Array.isArray(data.booked_slots) ? data.booked_slots : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load this listing.');
     } finally {
@@ -83,7 +107,13 @@ export default function ListingDetailScreen() {
   const priceLabel = listing ? (listing.price > 0 ? formatPrice(listing.price) : t('free')) : '';
 
   const openBooking = async () => {
-    const user = await getSession();
+    if (alreadyBooked) {
+      Alert.alert('Already booked', 'You already have an approved booking for this experience.');
+      return;
+    }
+    // restoreSession re-applies the auth token (so the booking request is
+    // authorized even right after an app reload) and tells us if we're logged in.
+    const user = await restoreSession();
     if (!user) {
       Alert.alert('Sign in required', 'Please sign in to book this experience.', [
         { text: 'Cancel', style: 'cancel' },
@@ -92,6 +122,7 @@ export default function ListingDetailScreen() {
       return;
     }
     setBookingDate('');
+    setBookingTime('');
     setGuests(1);
     setStep('details');
     setQrMethod('gcash');
@@ -100,14 +131,44 @@ export default function ListingDetailScreen() {
     setCardNumber('');
     setCardExpiry('');
     setCardCvv('');
+    setVoucherExpanded(false);
+    setVoucherDraft('');
+    setVoucherCode('');
     setModalOpen(true);
   };
 
-  const totalAmount = listing ? listing.price * guests : 0;
+  const subtotal = listing ? listing.price * guests : 0;
+  const appliedVoucher = voucherCode ? findVoucher(voucherCode) : null;
+  const voucherDiscount = appliedVoucher ? getVoucherDiscount(appliedVoucher, subtotal) : 0;
+  const totalAmount = Math.max(0, subtotal - voucherDiscount);
+
+  // Set of "YYYY-MM-DD|HH:MM" slots already taken, and dates where every slot
+  // is taken (so the calendar can fully disable them).
+  const bookedSet = React.useMemo(() => new Set(bookedSlots.map((s) => `${s.date}|${s.time}`)), [bookedSlots]);
+  const fullyBookedDates = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    bookedSlots.forEach((s) => {
+      counts[s.date] = (counts[s.date] ?? 0) + 1;
+    });
+    return Object.keys(counts).filter((d) => counts[d] >= TIME_SLOTS.length);
+  }, [bookedSlots]);
+  const isSlotBooked = (slot: string) => !!bookingDate && bookedSet.has(`${bookingDate}|${slot}`);
+
+  // If the selected time becomes unavailable after picking a date, clear it.
+  useEffect(() => {
+    if (bookingTime && isSlotBooked(bookingTime)) {
+      setBookingTime('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookingDate]);
 
   const goToPayment = () => {
     if (!bookingDate) {
       Alert.alert('Pick a date', 'Please choose a date from the calendar.');
+      return;
+    }
+    if (!bookingTime) {
+      Alert.alert('Pick a time', 'Please choose a start time for your experience.');
       return;
     }
     // Free listings skip the payment step entirely.
@@ -133,6 +194,90 @@ export default function ListingDetailScreen() {
     }
   };
 
+  const applyVoucher = () => {
+    const voucher = findVoucher(voucherDraft);
+    if (!voucher) {
+      Alert.alert('Invalid voucher', 'Enter one of the vouchers shown in the Sale tab.');
+      return;
+    }
+    if (subtotal < voucher.minSpend) {
+      Alert.alert('Voucher not available', `This voucher needs a minimum spend of ${formatPrice(voucher.minSpend)}.`);
+      return;
+    }
+
+    setVoucherCode(voucher.code);
+    setVoucherDraft(voucher.code);
+    setVoucherExpanded(false);
+  };
+
+  const clearVoucher = () => {
+    setVoucherCode('');
+    setVoucherDraft('');
+    setVoucherExpanded(false);
+  };
+
+  const renderVoucherControls = () => (
+    <>
+      {voucherCode ? (
+        <View style={[styles.voucherSummary, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.voucherSummaryTitle, { color: theme.textMain }]}>{appliedVoucher?.code} applied</Text>
+            <Text style={[styles.voucherSummaryText, { color: theme.textSub }]}>
+              {voucherDiscount > 0
+                ? `You save ${formatPrice(voucherDiscount)}`
+                : `Minimum spend ${formatPrice(appliedVoucher?.minSpend ?? 0)} not met yet.`}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={clearVoucher} activeOpacity={0.85}>
+            <Text style={[styles.voucherClear, { color: theme.accent }]}>Remove</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      <TouchableOpacity
+        style={[styles.voucherToggle, { borderColor: theme.border, backgroundColor: theme.card }]}
+        activeOpacity={0.85}
+        onPress={() => {
+          setVoucherDraft(voucherCode);
+          setVoucherExpanded((value) => !value);
+        }}
+      >
+        <Ionicons name="pricetag-outline" size={18} color={theme.accent} style={{ marginRight: 12 }} />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.voucherToggleTitle, { color: theme.textMain }]}>Enter voucher</Text>
+          <Text style={[styles.voucherToggleSub, { color: theme.textSub }]}>Apply a Sale tab code to reduce the total</Text>
+        </View>
+        <Ionicons name={voucherExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={theme.textSub} />
+      </TouchableOpacity>
+
+      {voucherExpanded ? (
+        <View style={styles.voucherEntryRow}>
+          <TextInput
+            style={[styles.input, styles.voucherInput, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.border }]}
+            placeholder="e.g. CEBU6"
+            placeholderTextColor={theme.textSub}
+            value={voucherDraft}
+            onChangeText={setVoucherDraft}
+            autoCapitalize="characters"
+          />
+          <TouchableOpacity
+            style={[styles.voucherApplyBtn, { backgroundColor: theme.primary }]}
+            activeOpacity={0.85}
+            onPress={applyVoucher}
+          >
+            <Text style={styles.voucherApplyText}>Apply</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {voucherCode && voucherDiscount <= 0 ? (
+        <Text style={[styles.voucherHint, { color: theme.textSub }]}>
+          The voucher is entered, but the current total does not meet the minimum spend yet.
+        </Text>
+      ) : null}
+    </>
+  );
+
   const submitBooking = async (
     method: PaymentMethod,
     reference?: string,
@@ -146,22 +291,33 @@ export default function ListingDetailScreen() {
       await createBooking({
         listing_id: listing.id,
         booking_date: bookingDate,
+        booking_time: bookingTime,
         guests,
         payment_method: method,
         payment_reference: reference,
         card_last4: cardLast4,
+        promo_code: voucherDiscount > 0 && appliedVoucher ? appliedVoucher.code : undefined,
       });
       setModalOpen(false);
       Alert.alert(
         'Payment received',
-        `Your booking for "${listing.title}" on ${bookingDate} is confirmed and sent to the admin for processing. You can see it under Trips.`,
+        `Your payment for "${listing.title}" on ${bookingDate}${bookingTime ? ` at ${formatTimeLabel(bookingTime)}` : ''} was received. Your booking is now pending approval — the admin will review and approve it shortly. You can track its status under Trips.`,
         [
           { text: 'View Trips', onPress: () => router.replace('/(tabs)/trips') },
           { text: 'OK' },
         ]
       );
     } catch (e) {
-      Alert.alert('Booking failed', e instanceof Error ? e.message : 'Please try again.');
+      if (isUnauthorized(e)) {
+        await clearSession();
+        setModalOpen(false);
+        Alert.alert('Session expired', 'Please sign in again to complete your booking.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Sign in', onPress: () => router.push('/(auth)/login') },
+        ]);
+      } else {
+        Alert.alert('Booking failed', e instanceof Error ? e.message : 'Please try again.');
+      }
     } finally {
       setBooking(false);
     }
@@ -224,7 +380,7 @@ export default function ListingDetailScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 + insets.bottom }}>
         <View>
           <Image source={{ uri: resolveImage(listing.image) }} style={styles.hero} />
-          <View style={styles.heroOverlay} />
+          <LinearGradient colors={gradients.hero} style={styles.heroOverlay} />
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()} activeOpacity={0.8}>
             <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
           </TouchableOpacity>
@@ -261,6 +417,19 @@ export default function ListingDetailScreen() {
             </Text>
           ) : null}
 
+          {listing.owner_id ? (
+            <TouchableOpacity
+              style={[styles.messageGuideBtn, { borderColor: colors.accent }]}
+              activeOpacity={0.85}
+              onPress={() => router.push(`/chat/${listing.owner_id}`)}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={17} color={colors.accent} style={{ marginRight: 8 }} />
+              <Text style={[styles.messageGuideText, { color: colors.accent }]}>
+                {listing.owner_name ? `Message ${listing.owner_name}` : 'Message the guide'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
           <Text style={[styles.sectionTitle, { color: theme.textMain }]}>About this experience</Text>
           <Text style={[styles.about, { color: theme.textSub }]}>
             {listing.description || listing.summary || 'No description provided yet.'}
@@ -284,20 +453,31 @@ export default function ListingDetailScreen() {
       >
         <View>
           <Text style={[styles.bookPriceLabel, { color: theme.textSub }]}>Starting from</Text>
-          <Text style={[styles.bookPrice, { color: theme.textMain }]}>
+          <Text style={[styles.bookPrice, { color: colors.accent }]}>
             {priceLabel}
             {listing.price > 0 ? (
               <Text style={[styles.bookPer, { color: theme.textSub }]}> / {listing.price_unit || 'person'}</Text>
             ) : null}
           </Text>
         </View>
-        <TouchableOpacity
-          style={[styles.bookButton, { backgroundColor: theme.accent }]}
-          onPress={openBooking}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.bookButtonText}>Book now</Text>
-        </TouchableOpacity>
+        {alreadyBooked ? (
+          <View style={[styles.bookButton, styles.bookedButton]}>
+            <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 7 }} />
+            <Text style={styles.bookButtonText}>Already booked</Text>
+          </View>
+        ) : (
+          <TouchableOpacity onPress={openBooking} activeOpacity={0.88}>
+            <LinearGradient
+              colors={gradients.brand}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.bookButton}
+            >
+              <Ionicons name="calendar" size={17} color="#FFFFFF" style={{ marginRight: 7 }} />
+              <Text style={styles.bookButtonText}>Book now</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Booking modal (multi-step) */}
@@ -326,7 +506,47 @@ export default function ListingDetailScreen() {
               {step === 'details' ? (
                 <>
                   <Text style={[styles.modalLabel, { color: theme.textSub }]}>Select a date</Text>
-                  <CalendarPicker value={bookingDate} onChange={setBookingDate} theme={theme} />
+                  <CalendarPicker value={bookingDate} onChange={setBookingDate} theme={theme} disabledDates={fullyBookedDates} />
+
+                  <Text style={[styles.modalLabel, { color: theme.textSub }]}>Select a start time</Text>
+                  <View style={styles.timeGrid}>
+                    {TIME_SLOTS.map((slot) => {
+                      const selected = bookingTime === slot;
+                      const booked = isSlotBooked(slot);
+                      return (
+                        <TouchableOpacity
+                          key={slot}
+                          activeOpacity={0.85}
+                          disabled={booked}
+                          onPress={() => setBookingTime(slot)}
+                          style={[
+                            styles.timeChip,
+                            { backgroundColor: theme.inputBg, borderColor: theme.border },
+                            selected && { backgroundColor: theme.accent, borderColor: theme.accent },
+                            booked && { opacity: 0.4, borderColor: theme.border },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.timeChipText,
+                              { color: selected ? '#FFFFFF' : theme.textMain },
+                              booked && { textDecorationLine: 'line-through', color: theme.textSub },
+                            ]}
+                          >
+                            {formatTimeLabel(slot)}
+                          </Text>
+                          {booked ? (
+                            <Text style={[styles.bookedTag, { color: theme.textSub }]}>Booked</Text>
+                          ) : null}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  {bookingDate ? (
+                    <Text style={[styles.slotHint, { color: theme.textSub }]}>
+                      Crossed-out times are already booked for this date.
+                    </Text>
+                  ) : null}
 
                   <Text style={[styles.modalLabel, { color: theme.textSub }]}>Guests</Text>
                   <View style={styles.guestRow}>
@@ -370,6 +590,8 @@ export default function ListingDetailScreen() {
                   <Text style={[styles.payTotal, { color: theme.textMain }]}>
                     Amount to pay: <Text style={{ color: theme.accent }}>{formatPrice(totalAmount)}</Text>
                   </Text>
+
+                  {renderVoucherControls()}
 
                   <TouchableOpacity
                     style={[styles.methodRow, { borderColor: theme.border, backgroundColor: theme.card }]}
@@ -426,6 +648,8 @@ export default function ListingDetailScreen() {
                     {qrMethod === 'gcash' ? 'GCash / e-Wallet' : 'InstaPay'}
                   </Text>
 
+                  {renderVoucherControls()}
+
                   <View style={styles.qrWrap}>
                     <Image
                       source={qrMethod === 'gcash' ? QR_EWALLET : QR_INSTAPAY}
@@ -464,6 +688,8 @@ export default function ListingDetailScreen() {
                   <Text style={[styles.payTotal, { color: theme.textMain }]}>
                     Pay <Text style={{ color: theme.accent }}>{formatPrice(totalAmount)}</Text>
                   </Text>
+
+                  {renderVoucherControls()}
 
                   <Text style={[styles.modalLabel, { color: theme.textSub }]}>Cardholder name</Text>
                   <TextInput
@@ -564,6 +790,8 @@ const styles = StyleSheet.create({
   factLabel: { fontSize: 12, marginTop: 6 },
   factValue: { fontSize: 15, fontWeight: '700', marginTop: 2 },
   metaLine: { fontSize: 13, fontWeight: '600' },
+  messageGuideBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderRadius: 14, paddingVertical: 12, marginTop: 16 },
+  messageGuideText: { fontSize: 15, fontWeight: '700' },
   sectionTitle: { fontSize: 17, fontWeight: '800', marginTop: 20, marginBottom: 10 },
   about: { fontSize: 14, lineHeight: 22 },
   bookBar: {
@@ -582,7 +810,8 @@ const styles = StyleSheet.create({
   bookPriceLabel: { fontSize: 11 },
   bookPrice: { fontSize: 18, fontWeight: '800' },
   bookPer: { fontSize: 12, fontWeight: '500' },
-  bookButton: { borderRadius: 14, paddingVertical: 14, paddingHorizontal: 36 },
+  bookButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 14, paddingVertical: 15, paddingHorizontal: 32 },
+  bookedButton: { backgroundColor: '#9CA3AF' },
   bookButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalCard: { borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 22, paddingBottom: 34, maxHeight: '90%' },
@@ -590,6 +819,11 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: '800', flex: 1, marginRight: 12 },
   modalLabel: { fontSize: 13, fontWeight: '600', marginBottom: 6, marginTop: 12 },
   input: { borderRadius: 12, paddingVertical: 13, paddingHorizontal: 16, fontSize: 15 },
+  timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 2 },
+  timeChip: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, alignItems: 'center' },
+  timeChipText: { fontSize: 13, fontWeight: '700' },
+  bookedTag: { fontSize: 9, fontWeight: '700', marginTop: 1 },
+  slotHint: { fontSize: 12, marginTop: 8, fontStyle: 'italic' },
   guestRow: { flexDirection: 'row', alignItems: 'center' },
   stepBtn: { width: 42, height: 42, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   guestCount: { fontSize: 18, fontWeight: '800', marginHorizontal: 20 },
@@ -612,4 +846,16 @@ const styles = StyleSheet.create({
   qrImage: { width: 230, height: 230 },
   qrHint: { fontSize: 13, lineHeight: 19, marginBottom: 4, textAlign: 'center' },
   cardRow: { flexDirection: 'row' },
+  voucherSummary: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 14, gap: 12 },
+  voucherSummaryTitle: { fontSize: 14, fontWeight: '800' },
+  voucherSummaryText: { fontSize: 12, marginTop: 2 },
+  voucherClear: { fontSize: 13, fontWeight: '800' },
+  voucherToggle: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 14 },
+  voucherToggleTitle: { fontSize: 14, fontWeight: '800' },
+  voucherToggleSub: { fontSize: 12, marginTop: 2 },
+  voucherEntryRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+  voucherInput: { flex: 1, borderWidth: 1 },
+  voucherApplyBtn: { borderRadius: 12, paddingVertical: 13, paddingHorizontal: 16, alignItems: 'center' },
+  voucherApplyText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  voucherHint: { fontSize: 12, marginTop: 8, lineHeight: 17 },
 });

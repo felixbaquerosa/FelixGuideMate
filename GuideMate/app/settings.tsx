@@ -4,7 +4,6 @@ import React, { useCallback, useState } from 'react';
 import {
     FlatList,
     Modal,
-    SafeAreaView,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -13,8 +12,9 @@ import {
     useColorScheme,
     View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { logout } from '../lib/authStore';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Alert } from 'react-native';
+import { getSession, logout } from '../lib/authStore';
 import { isBiometricEnabled } from '../lib/biometric';
 import {
     CURRENCY_LIST,
@@ -35,12 +35,29 @@ export default function SettingsScreen() {
 
   const [picker, setPicker] = useState<Picker>(null);
   const [fingerprintOn, setFingerprintOn] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       isBiometricEnabled().then(setFingerprintOn);
+      getSession().then((s) => setLoggedIn(!!s));
     }, [])
   );
+
+  const requireLogin = (action: () => void) => {
+    if (!loggedIn) {
+      Alert.alert(
+        'Login required',
+        'Please register or log in to your account first to use this feature.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Register / Log in', onPress: () => router.replace('/(auth)/login') },
+        ]
+      );
+      return;
+    }
+    action();
+  };
 
   const theme = {
     bg: isDark ? '#0F1012' : '#F2F3F5',
@@ -96,7 +113,7 @@ export default function SettingsScreen() {
   );
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]} edges={['left', 'right']}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={theme.card} />
 
       {/* Header */}
@@ -111,14 +128,14 @@ export default function SettingsScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         <SectionLabel text={t('sec_account')} />
         <View style={[styles.group, { backgroundColor: theme.card }]}>
-          <Row label={t('login_methods')} first onPress={() => {}} />
-          <Row label={t('account_security')} onPress={() => router.push('/account-security')} />
+          <Row label={t('login_methods')} first onPress={() => router.push('/login-methods')} />
+          <Row label={t('account_security')} onPress={() => requireLogin(() => router.push('/account-security'))} />
           <Row
             label={t('fingerprint')}
             value={fingerprintOn ? t('enabled') : t('not_enabled')}
             valueColor={fingerprintOn ? theme.accent : undefined}
             showDot={!fingerprintOn}
-            onPress={() => router.push('/fingerprint')}
+            onPress={() => requireLogin(() => router.push('/fingerprint'))}
           />
         </View>
 
@@ -126,13 +143,13 @@ export default function SettingsScreen() {
         <View style={[styles.group, { backgroundColor: theme.card }]}>
           <Row label={t('language')} value={currentLanguageLabel} first onPress={() => setPicker('language')} />
           <Row label={t('currency')} value={currency} onPress={() => setPicker('currency')} />
-          <Row label={t('notifications')} onPress={() => {}} />
+          <Row label={t('notifications')} onPress={() => router.push('/notification-settings')} />
         </View>
 
         <SectionLabel text={t('sec_others')} />
         <View style={[styles.group, { backgroundColor: theme.card }]}>
-          <Row label={t('feedback')} first onPress={() => {}} />
-          <Row label={t('about')} onPress={() => {}} />
+          <Row label={t('feedback')} first onPress={() => router.push('/feedback')} />
+          <Row label={t('about')} onPress={() => router.push('/about')} />
         </View>
 
         <View style={[styles.group, styles.logoutGroup, { backgroundColor: theme.card }]}>

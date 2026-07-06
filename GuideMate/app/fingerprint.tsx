@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getSavedCredentials, isBiometricEnabled, setBiometricEnabled } from '../lib/biometric';
+import { getSession } from '../lib/authStore';
 
 export default function FingerprintScreen() {
   const router = useRouter();
@@ -34,11 +35,23 @@ export default function FingerprintScreen() {
   };
 
   useEffect(() => {
-    isBiometricEnabled().then((v) => {
+    (async () => {
+      // Fingerprint login can only be set up by a signed-in account, so it
+      // always binds to whoever is currently logged in (not just one user).
+      const session = await getSession();
+      if (!session) {
+        Alert.alert(
+          'Login required',
+          'Please register or log in first, then you can enable fingerprint login for your account.',
+          [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }]
+        );
+        return;
+      }
+      const v = await isBiometricEnabled();
       setEnabled(v);
       setLoading(false);
-    });
-  }, []);
+    })();
+  }, [router]);
 
   const handleToggle = async () => {
     if (enabled) {
@@ -73,17 +86,19 @@ export default function FingerprintScreen() {
       });
 
       if (result.success) {
+        // Only enable when this account's credentials are saved on the device,
+        // so the fingerprint signs back in as THIS user (works for every user).
+        const creds = await getSavedCredentials();
+        if (!creds) {
+          Alert.alert(
+            'Log in with your password first',
+            'For security, please sign out and log in once with your email and password, then enable fingerprint. This links the fingerprint to your account.'
+          );
+          return;
+        }
         await setBiometricEnabled(true);
         setEnabled(true);
-        const creds = await getSavedCredentials();
-        if (creds) {
-          Alert.alert('Success', 'Fingerprint login is now enabled. Next time you can sign in with your fingerprint only.');
-        } else {
-          Alert.alert(
-            'Almost done',
-            'Fingerprint is enabled. Please sign in with your password once more, and after that you can log in with your fingerprint only.'
-          );
-        }
+        Alert.alert('Success', 'Fingerprint login is now enabled for your account. Next time you can sign in with your fingerprint only.');
       } else if (result.error && result.error !== 'user_cancel' && result.error !== 'system_cancel') {
         Alert.alert('Setup failed', 'Could not verify your fingerprint. Please try again.');
       }

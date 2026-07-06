@@ -1,0 +1,237 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Controllers;
+
+use App\Controllers\Concerns\HandlesGuideDocuments;
+use App\Core\Auth;
+use App\Core\Controller;
+use App\Models\GuideDocument;
+use App\Models\PasswordReset;
+use App\Models\User;
+use App\Services\NotificationService;
+use RuntimeException;
+
+final class AuthController extends Controller
+{
+    use HandlesGuideDocuments;
+
+    public function showLogin(): void
+    {
+        $this->view('auth/login', ['title' => 'Log in', 'errors' => errors()], 'auth');
+    }
+
+    public function login(): void
+    {
+        $this->verifyCsrf();
+        $email = (string) $this->input('email', '');
+        $password = (string) $this->input('password', '');
+
+        $errors = $this->requireFields(['email', 'password']);
+        if ($errors !== []) {
+            flash_keep_old($errors, ['email' => $email], '/login');
+        }
+
+        // Admins must use their own separate portal.
+        $existing = User::findByEmail($email);
+        if ($existing !== null && $existing['role'] === 'admin') {
+            flash('info', 'Administrators sign in through the admin portal.');
+            redirect('/admin/login');
+        }
+        // The web portal is for tour guides. Tourists use the mobile app.
+        if ($existing !== null && $existing['role'] === 'tourist') {
+            flash_keep_old(
+                ['email' => 'You are a tourist, you cannot log in your account here. Please use the GuideMate mobile app.'],
+                ['email' => $email],
+                '/login'
+            );
+        }
+        if ($existing !== null && (int) $existing['is_active'] === 0) {
+            flash_keep_old(['email' => 'This account has been suspended. Please contact support.'], ['email' => $email], '/login');
+        }
+
+        if (!Auth::attempt($email, $password)) {
+            flash_keep_old(['email' => 'Those credentials do not match our records.'], ['email' => $email], '/login');
+        }
+
+        flash('success', 'Welcome back!');
+        redirect('/dashboard');
+    }
+
+    public function showRegister(): void
+    {
+        $this->view('auth/register', [
+            'title' => 'Sign up',
+            'errors' => errors(),
+            'role' => $this->input('role', 'tourist'),
+        ], 'auth');
+    }
+
+    public function register(): void
+    {
+        $this->verifyCsrf();
+        $name = (string) $this->input('name', '');
+        $email = (string) $this->input('email', '');
+        $password = (string) $this->input('password', '');
+        $confirm = (string) $this->input('password_confirm', '');
+        $role = $this->input('role', 'tourist') === 'guide' ? 'guide' : 'tourist';
+
+        $errors = $this->requireFields(['name', 'email', 'password']);
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $errors['email'] = 'Please enter a valid email address.';
+        } elseif (User::emailExists($email)) {
+            $errors['email'] = 'That email is already registered.';
+        }
+
+        $passwordError = $this->validatePasswordPolicy($password);
+        if ($passwordError !== null) {
+            $errors['password'] = $passwordError;
+        } elseif ($password !== $confirm) {
+            $errors['password_confirm'] = 'Passwords do not match.';
+        }
+
+        // Guides must submit verification documents up front.
+        if ($role === 'guide') {
+            $errors += $this->guideDocErrors();
+        }
+
+        if ($errors !== []) {
+            flash_keep_old($errors, ['name' => $name, 'email' => $email, 'role' => $role], '/register');
+        }
+
+        if (!$this->input('accept_terms')) {
+            flash_keep_old(['accept_terms' => 'You must accept the Terms of Service and Privacy Policy.'], ['name' => $name, 'email' => $email, 'role' => $role], '/register');
+        }
+
+        $id = User::create($name, $email, $password, $role);
+
+        if ($role === 'guide') {
+            try {
+                $this->storeGuideDocs($id);
+            } catch (RuntimeException $e) {
+                // Roll back so the applicant can try again cleanly.
+                GuideDocument::deleteForUser($id);
+                User::delete($id);
+                flash_keep_old(
+                    ['valid_id' => 'We could not save your documents: ' . $e->getMessage()],
+                    ['name' => $name, 'email' => $email, 'role' => $role],
+                    '/register'
+                );
+            }
+        }
+
+        Auth::login(User::find($id) ?? []);
+
+        NotificationService::welcome($email, explode(' ', $name)[0]);
+
+        if ($role === 'guide') {
+            flash('success', 'Thanks, ' . explode(' ', $name)[0] . '! Your guide application and documents were submitted and are now pending admin review.');
+        } else {
+            flash('success', 'Welcome to GuideMate, ' . explode(' ', $name)[0] . '!');
+        }
+        redirect('/dashboard');
+    }
+
+    public function logout(): void
+    {
+        $this->verifyCsrf();
+        Auth::logout();
+        flash('info', 'You have been logged out.');
+        redirect('/');
+    }
+
+    public function showForgotPassword(): void
+    {
+        $this->view('auth/forgot', ['title' => 'Forgot password', 'errors' => errors()], 'auth');
+    }
+
+    public function sendResetLink(): void
+    {
+        $this->verifyCsrf();
+        $email = (string) $this->input('email', '');
+        $errors = $this->requireFields(['email']);
+        if ($errors !== []) {
+            flash_keep_old($errors, ['email' => $email], '/forgot-password');
+        }
+
+        $user = User::findByEmail($email);
+        if ($user !== null && $user['role'] !== 'admin') {
+            $token = PasswordReset::create($email);
+            NotificationService::passwordReset($email, $token);
+        }
+
+        flash('success', 'If that email is registered, we sent a password reset link.');
+        redirect('/login');
+    }
+
+    public function showResetPassword(string $token): void
+    {
+        if (PasswordReset::findValid($token) === null) {
+            flash('error', 'This reset link is invalid or has expired.');
+            redirect('/forgot-password');
+        }
+        $this->view('auth/reset', ['title' => 'Reset password', 'token' => $token, 'errors' => errors()], 'auth');
+    }
+
+    public function resetPassword(string $token): void
+    {
+        $this->verifyCsrf();
+        $row = PasswordReset::findValid($token);
+        if ($row === null) {
+            flash('error', 'This reset link is invalid or has expired.');
+            redirect('/forgot-password');
+        }
+
+        $password = (string) $this->input('password', '');
+        $confirm = (string) $this->input('password_confirm', '');
+        $errors = $this->requireFields(['password', 'password_confirm']);
+        $policy = $this->validatePasswordPolicy($password);
+        if ($policy !== null) {
+            $errors['password'] = $policy;
+        } elseif ($password !== $confirm) {
+            $errors['password_confirm'] = 'Passwords do not match.';
+        }
+        if ($errors !== []) {
+            flash_keep_old($errors, [], '/reset-password/' . $token);
+        }
+
+        $user = User::findByEmail((string) $row['email']);
+        if ($user === null) {
+            flash('error', 'Account not found.');
+            redirect('/login');
+        }
+
+        User::updatePassword((int) $user['id'], $password);
+        PasswordReset::delete((string) $row['email']);
+        flash('success', 'Password updated. You can log in now.');
+        redirect('/login');
+    }
+
+    /**
+     * Enforce the password policy:
+     *   - 8 to 12 characters
+     *   - at least one uppercase letter
+     *   - at least one number
+     *   - at least one special character
+     *
+     * Returns an error message, or null when the password is valid.
+     */
+    private function validatePasswordPolicy(string $password): ?string
+    {
+        $length = strlen($password);
+        if ($length < 8 || $length > 12) {
+            return 'Password must be 8 to 12 characters long.';
+        }
+        if (!preg_match('/[A-Z]/', $password)) {
+            return 'Password must include at least one uppercase letter.';
+        }
+        if (!preg_match('/[0-9]/', $password)) {
+            return 'Password must include at least one number.';
+        }
+        if (!preg_match('/[^A-Za-z0-9]/', $password)) {
+            return 'Password must include at least one special character.';
+        }
+        return null;
+    }
+}

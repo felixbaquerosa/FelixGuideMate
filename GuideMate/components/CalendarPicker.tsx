@@ -17,6 +17,7 @@ type Props = {
   value: string; // YYYY-MM-DD or ''
   onChange: (date: string) => void;
   theme: Theme;
+  disabledDates?: string[]; // YYYY-MM-DD dates that are fully booked
 };
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -33,9 +34,11 @@ function toKey(year: number, month: number, day: number): string {
   return `${year}-${pad(month + 1)}-${pad(day)}`;
 }
 
-export default function CalendarPicker({ value, onChange, theme }: Props) {
+export default function CalendarPicker({ value, onChange, theme, disabledDates = [] }: Props) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
+  const blocked = useMemo(() => new Set(disabledDates), [disabledDates]);
 
   const initial = value ? new Date(value) : today;
   const [viewYear, setViewYear] = useState(initial.getFullYear());
@@ -99,13 +102,15 @@ export default function CalendarPicker({ value, onChange, theme }: Props) {
           }
           const key = toKey(viewYear, viewMonth, day);
           const isPast = key < todayKey;
+          const isFull = blocked.has(key);
+          const isDisabled = isPast || isFull;
           const isSelected = key === value;
           const isToday = key === todayKey;
           return (
             <TouchableOpacity
               key={key}
               style={styles.cell}
-              disabled={isPast}
+              disabled={isDisabled}
               activeOpacity={0.7}
               onPress={() => onChange(key)}
             >
@@ -119,8 +124,9 @@ export default function CalendarPicker({ value, onChange, theme }: Props) {
                 <Text
                   style={[
                     styles.dayText,
-                    { color: isPast ? theme.textSub : theme.textMain },
+                    { color: isDisabled ? theme.textSub : theme.textMain },
                     isPast && { opacity: 0.35 },
+                    isFull && { opacity: 0.4, textDecorationLine: 'line-through' },
                     isSelected && { color: '#FFFFFF', fontWeight: '800' },
                   ]}
                 >

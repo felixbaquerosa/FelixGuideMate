@@ -1,45 +1,31 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import {
-    ActivityIndicator,
-    FlatList,
-    Image,
-    SafeAreaView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    useColorScheme,
-    View,
-} from 'react-native';
-import { ApiListing, getFavorites, resolveImage } from '../../services/api';
-import { getSession } from '../../lib/authStore';
+import { ActivityIndicator, FlatList, Image, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { EmptyState, RatingPill, ScreenTitle } from '../../components/ui';
+import { clearSession, restoreSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
+import { useTheme } from '../../lib/theme';
+import { ApiListing, getFavorites, isUnauthorized, resolveImage } from '../../services/api';
 
 export default function WishlistScreen() {
   const router = useRouter();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
   const { t, formatPrice } = usePreferences();
+  const insets = useSafeAreaInsets();
+  const { colors, isDark, shadow } = useTheme();
 
   const [listings, setListings] = useState<ApiListing[]>([]);
   const [loading, setLoading] = useState(true);
   const [loggedIn, setLoggedIn] = useState(true);
   const [error, setError] = useState('');
 
-  const theme = {
-    bg: isDark ? '#111114' : '#F8F9FA',
-    cardBg: isDark ? '#1E2029' : '#FFFFFF',
-    textMain: isDark ? '#FFFFFF' : '#1A202C',
-    textSub: isDark ? '#9CA3AF' : '#6B7280',
-    accent: '#FF5A1F',
-  };
-
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
-    const session = await getSession();
+    // restoreSession both returns the cached user AND re-applies the auth token,
+    // so authenticated calls work even right after an app reload.
+    const session = await restoreSession();
     if (!session) {
       setLoggedIn(false);
       setLoading(false);
@@ -50,7 +36,13 @@ export default function WishlistScreen() {
       const data = await getFavorites();
       setListings(data.listings);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load your wishlist.');
+      if (isUnauthorized(e)) {
+        // Token expired/invalid — clear it and show the friendly sign-in prompt.
+        await clearSession();
+        setLoggedIn(false);
+      } else {
+        setError(e instanceof Error ? e.message : 'Failed to load your wishlist.');
+      }
     } finally {
       setLoading(false);
     }
@@ -64,41 +56,55 @@ export default function WishlistScreen() {
 
   const renderItem = ({ item }: { item: ApiListing }) => (
     <TouchableOpacity
-      style={[styles.card, { backgroundColor: theme.cardBg }]}
-      activeOpacity={0.85}
+      style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, shadow.sm]}
+      activeOpacity={0.88}
       onPress={() => router.push({ pathname: '/listing/[slug]', params: { slug: item.slug } })}
     >
-      <Image source={{ uri: resolveImage(item.image) }} style={styles.cardImage} />
+      <View style={styles.imageWrap}>
+        <Image source={{ uri: resolveImage(item.image) }} style={styles.cardImage} />
+        {item.rating > 0 ? (
+          <View style={styles.ratingPos}>
+            <RatingPill rating={item.rating} count={item.review_count} compact />
+          </View>
+        ) : null}
+      </View>
       <View style={styles.cardBody}>
-        {item.area ? <Text style={[styles.area, { color: theme.accent }]}>{item.area}</Text> : null}
-        <Text style={[styles.cardTitle, { color: theme.textMain }]} numberOfLines={1}>{item.title}</Text>
-        <Text style={[styles.price, { color: theme.textMain }]}>
+        {item.area ? (
+          <View style={styles.areaRow}>
+            <Ionicons name="location-sharp" size={11} color={colors.primary} />
+            <Text style={[styles.area, { color: colors.textSub }]} numberOfLines={1}>{item.area}</Text>
+          </View>
+        ) : null}
+        <Text style={[styles.cardTitle, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
+        <Text style={[styles.price, { color: colors.accent }]}>
           {item.price > 0 ? formatPrice(item.price) : t('free')}
         </Text>
       </View>
-      <Ionicons name="heart" size={22} color="#EF4444" style={styles.heart} />
+      <View style={[styles.heartWrap, { backgroundColor: isDark ? colors.cardAlt : '#FEE2E2' }]}>
+        <Ionicons name="heart" size={18} color="#EF4444" />
+      </View>
     </TouchableOpacity>
   );
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={theme.bg} />
-      <View style={styles.headerBar}>
-        <Text style={[styles.headerTitle, { color: theme.textMain }]}>Wishlist</Text>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bgAlt }]} edges={['left', 'right']}>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <View style={[styles.headerBar, { paddingTop: insets.top + 16 }]}>
+        <ScreenTitle title={t('tab_wishlist')} subtitle="Places you've saved for later" />
       </View>
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.accent} />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : !loggedIn ? (
-        <View style={styles.center}>
-          <Ionicons name="heart-outline" size={44} color={theme.textSub} />
-          <Text style={[styles.emptyText, { color: theme.textSub }]}>Log in to see your saved listings.</Text>
-          <TouchableOpacity style={[styles.btn, { backgroundColor: theme.accent }]} onPress={() => router.push('/(auth)/login')}>
-            <Text style={styles.btnText}>Log in</Text>
-          </TouchableOpacity>
-        </View>
+        <EmptyState
+          icon="heart-outline"
+          title="Save your favorites"
+          subtitle="Log in to see the listings you've saved."
+          actionLabel="Log in"
+          onAction={() => router.push('/(auth)/login')}
+        />
       ) : (
         <FlatList
           data={listings}
@@ -107,17 +113,13 @@ export default function WishlistScreen() {
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
-            <View style={styles.center}>
-              <Ionicons name={error ? 'cloud-offline-outline' : 'heart-outline'} size={44} color={theme.textSub} />
-              <Text style={[styles.emptyText, { color: theme.textSub }]}>
-                {error || 'No saved listings yet. Tap the heart on a listing to save it here.'}
-              </Text>
-              {error ? (
-                <TouchableOpacity style={[styles.btn, { backgroundColor: theme.accent }]} onPress={load}>
-                  <Text style={styles.btnText}>Retry</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
+            <EmptyState
+              icon={error ? 'cloud-offline-outline' : 'heart-outline'}
+              title={error ? 'Something went wrong' : 'No saved listings yet'}
+              subtitle={error || 'Tap the heart on any listing to save it here.'}
+              actionLabel={error ? 'Retry' : 'Explore Cebu'}
+              onAction={error ? load : () => router.push('/things-to-do')}
+            />
           }
         />
       )}
@@ -127,18 +129,17 @@ export default function WishlistScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  headerBar: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 },
-  headerTitle: { fontSize: 26, fontWeight: '800' },
-  center: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, paddingTop: 60 },
+  headerBar: { paddingHorizontal: 20, paddingBottom: 12 },
+  center: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
   listContent: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
-  card: { flexDirection: 'row', alignItems: 'center', borderRadius: 16, overflow: 'hidden', marginBottom: 14 },
-  cardImage: { width: 90, height: 90, resizeMode: 'cover', backgroundColor: '#00000011' },
+  card: { flexDirection: 'row', alignItems: 'center', borderRadius: 18, overflow: 'hidden', marginBottom: 14, borderWidth: 1, padding: 8 },
+  imageWrap: { width: 96, height: 96, borderRadius: 14, overflow: 'hidden' },
+  cardImage: { width: '100%', height: '100%', resizeMode: 'cover', backgroundColor: '#00000011' },
+  ratingPos: { position: 'absolute', top: 6, left: 6 },
   cardBody: { flex: 1, paddingHorizontal: 12 },
-  area: { fontSize: 12, fontWeight: '700', marginBottom: 2 },
-  cardTitle: { fontSize: 15, fontWeight: '800' },
-  price: { fontSize: 14, fontWeight: '700', marginTop: 4 },
-  heart: { marginRight: 14 },
-  emptyText: { fontSize: 14, textAlign: 'center', marginTop: 12, lineHeight: 20 },
-  btn: { marginTop: 16, paddingVertical: 11, paddingHorizontal: 30, borderRadius: 12 },
-  btnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+  areaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3 },
+  area: { fontSize: 11, fontWeight: '600', marginLeft: 3, flex: 1 },
+  cardTitle: { fontSize: 15, fontWeight: '800', lineHeight: 19 },
+  price: { fontSize: 14, fontWeight: '800', marginTop: 5 },
+  heartWrap: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
 });

@@ -1,43 +1,42 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import React from 'react';
-import { useColorScheme } from 'react-native';
+import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePreferences } from '../../lib/preferences';
+import { useTheme } from '../../lib/theme';
 
 export default function TabsLayout() {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
   const insets = useSafeAreaInsets();
   const { t } = usePreferences();
+  const { colors, shadow } = useTheme();
 
-  // Reserve space for the phone's bottom navigation / gesture bar so the
-  // tab labels never overlap the system buttons.
   const bottomInset = insets.bottom;
 
-  const themeColors = {
-    background: isDark ? '#111114' : '#FFFFFF',
-    border: isDark ? '#2A2D38' : '#E5E5E5',
-    activeText: '#22C55E', // Re-branded Green accent
-    inactiveText: isDark ? '#9CA3AF' : '#888888',
-  };
+  const haptic = () => Haptics.selectionAsync().catch(() => {});
 
   return (
     <Tabs
+      screenListeners={{ tabPress: haptic }}
       screenOptions={{
-        tabBarActiveTintColor: themeColors.activeText, 
-        tabBarInactiveTintColor: themeColors.inactiveText,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMute,
         tabBarStyle: {
-          backgroundColor: themeColors.background,
+          backgroundColor: colors.card,
           borderTopWidth: 1,
-          borderTopColor: themeColors.border,
-          height: 60 + bottomInset,
+          borderTopColor: colors.border,
+          height: 62 + bottomInset,
           paddingBottom: 8 + bottomInset,
           paddingTop: 8,
+          ...(Platform.OS === 'ios' ? shadow.md : { elevation: 12 }),
         },
         tabBarLabelStyle: {
           fontSize: 11,
-          fontWeight: '600',
+          fontWeight: '700',
+        },
+        tabBarItemStyle: {
+          paddingTop: 2,
         },
         headerShown: false,
       }}
@@ -47,7 +46,7 @@ export default function TabsLayout() {
         options={{
           title: t('tab_home'),
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={23} color={color} />
           ),
         }}
       />
@@ -56,7 +55,7 @@ export default function TabsLayout() {
         options={{
           title: t('tab_wishlist'),
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'heart' : 'heart-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'heart' : 'heart-outline'} size={23} color={color} />
           ),
         }}
       />
@@ -65,7 +64,7 @@ export default function TabsLayout() {
         options={{
           title: t('tab_sale'),
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'pricetag' : 'pricetag-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'pricetag' : 'pricetag-outline'} size={23} color={color} />
           ),
         }}
       />
@@ -74,7 +73,7 @@ export default function TabsLayout() {
         options={{
           title: t('tab_trips'),
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'briefcase' : 'briefcase-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'briefcase' : 'briefcase-outline'} size={23} color={color} />
           ),
         }}
       />
@@ -83,7 +82,7 @@ export default function TabsLayout() {
         options={{
           title: t('tab_account'),
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={23} color={color} />
           ),
         }}
       />

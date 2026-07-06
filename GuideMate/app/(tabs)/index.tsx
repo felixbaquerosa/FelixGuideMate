@@ -1,31 +1,37 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Dimensions,
   FlatList,
   Image,
   RefreshControl,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  useColorScheme,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { EmptyState, RatingPill, SectionHeader } from '../../components/ui';
+import { getSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
+import { useTheme } from '../../lib/theme';
 import { ApiListing, getHome, HomePayload, resolveImage } from '../../services/api';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 44) / 2;
+const HERO_WIDTH = width * 0.78;
 
-// Map backend category slugs to Ionicons + colors.
+// Map backend category slugs to Ionicons + soft tints.
 const CATEGORY_STYLE: Record<string, { icon: string; bg: string; color: string }> = {
   'things-to-do': { icon: 'compass', bg: '#FFF2E6', color: '#FF8C00' },
   'tour-guides': { icon: 'people', bg: '#E6F0FA', color: '#3B82F6' },
-  hotels: { icon: 'bed', bg: '#FFF9E6', color: '#FBBF24' },
+  hotels: { icon: 'bed', bg: '#FFF9E6', color: '#F59E0B' },
   restaurants: { icon: 'restaurant', bg: '#E6F7ED', color: '#10B981' },
 };
 
@@ -33,8 +39,6 @@ function categoryStyle(slug: string) {
   return CATEGORY_STYLE[slug] ?? { icon: 'apps', bg: '#FFEBEA', color: '#EF4444' };
 }
 
-// Extra travel service shortcuts (shown together with the API categories in
-// one equal grid).
 const SERVICES: { key: string; label: string; icon: string; color: string; bg: string }[] = [
   { key: 'attractions', label: 'Attractions', icon: 'ticket', color: '#EC4899', bg: '#FCE7F3' },
   { key: 'car', label: 'Car Rentals', icon: 'car-sport', color: '#3B82F6', bg: '#E0EDFF' },
@@ -44,31 +48,23 @@ const SERVICES: { key: string; label: string; icon: string; color: string; bg: s
 
 export default function HomeScreen() {
   const router = useRouter();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
   const insets = useSafeAreaInsets();
   const { t, formatPrice } = usePreferences();
+  const { colors, isDark, radius, shadow, gradients, brand } = useTheme();
 
   const [data, setData] = useState<HomePayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-
-  const theme = {
-    bg: isDark ? '#111114' : '#FFFFFF',
-    cardBg: isDark ? '#1E2029' : '#F5F5F5',
-    border: isDark ? '#2A2D38' : '#E5E5E5',
-    textMain: isDark ? '#FFFFFF' : '#111111',
-    textSub: isDark ? '#9CA3AF' : '#666666',
-    categoryText: isDark ? '#E5E7EB' : '#444444',
-    accent: '#FF5A1F',
-  };
+  const [firstName, setFirstName] = useState('');
 
   const load = useCallback(async () => {
     setError('');
     try {
-      const home = await getHome();
+      const [home, session] = await Promise.all([getHome(), getSession()]);
       setData(home);
+      setFirstName(session?.fullName?.trim().split(' ')[0] ?? '');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load.');
     } finally {
@@ -82,14 +78,17 @@ export default function HomeScreen() {
     }, [load])
   );
 
-  const openListing = (slug: string) =>
-    router.push({ pathname: '/listing/[slug]', params: { slug } });
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
 
-  const openCategory = (slug: string) =>
-    router.push({ pathname: '/things-to-do', params: { category: slug } });
-
-  const openAttractions = () =>
-    router.push({ pathname: '/things-to-do', params: { featured: '1' } });
+  const openListing = (slug: string) => router.push({ pathname: '/listing/[slug]', params: { slug } });
+  const openCategory = (slug: string) => router.push({ pathname: '/things-to-do', params: { category: slug } });
+  const openAttractions = () => router.push({ pathname: '/things-to-do', params: { featured: '1' } });
+  const openExplore = () => router.push('/things-to-do');
+  const submitSearch = () => router.push({ pathname: '/things-to-do', params: { q: searchQuery } });
 
   type GridItem = { key: string; label: string; icon: string; bg: string; color: string; onPress: () => void };
 
@@ -111,157 +110,357 @@ export default function HomeScreen() {
       icon: s.icon,
       bg: s.bg,
       color: s.color,
-      onPress: s.key === 'attractions' ? openAttractions : () => {},
+      // Every shortcut now navigates somewhere useful (no dead buttons).
+      onPress: () => {
+        if (s.key === 'attractions') return openAttractions();
+        if (s.key === 'car') return router.push('/car-rentals');
+        if (s.key === 'esim') return router.push('/esim');
+        if (s.key === 'flights') {
+          return Alert.alert('Coming Soon', 'Stay tuned! Flight bookings are on the way. ✈️');
+        }
+        return openExplore();
+      },
     })),
   ];
 
+  const featured = data?.featured?.length ? data.featured : data?.recommended ?? [];
+  const listings = data?.recommended?.length ? data.recommended : data?.featured ?? [];
+
+  const renderHero = ({ item }: { item: ApiListing }) => (
+    <TouchableOpacity
+      style={[styles.heroCard, { width: HERO_WIDTH }, shadow.md]}
+      activeOpacity={0.9}
+      onPress={() => openListing(item.slug)}
+    >
+      <Image source={{ uri: resolveImage(item.image) }} style={styles.heroImage} />
+      <LinearGradient colors={gradients.hero} style={StyleSheet.absoluteFill as any} />
+      <View style={styles.heroTopRow}>
+        <View style={styles.featuredTag}>
+          <Ionicons name="sparkles" size={11} color="#FFFFFF" />
+          <Text style={styles.featuredTagText}>Featured</Text>
+        </View>
+        <RatingPill rating={item.rating} count={item.review_count} />
+      </View>
+      <View style={styles.heroBottom}>
+        {item.area ? (
+          <View style={styles.heroAreaRow}>
+            <Ionicons name="location-sharp" size={12} color="#FFFFFF" />
+            <Text style={styles.heroArea} numberOfLines={1}>{item.area}</Text>
+          </View>
+        ) : null}
+        <Text style={styles.heroTitle} numberOfLines={2}>{item.title}</Text>
+        <Text style={styles.heroPrice}>{item.price > 0 ? formatPrice(item.price) : t('free')}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+
   const renderGridItem = (item: GridItem) => (
     <TouchableOpacity key={item.key} style={styles.gridItem} activeOpacity={0.7} onPress={item.onPress}>
-      <View style={[styles.gridIconBg, { backgroundColor: item.bg }]}>
+      <View style={[styles.gridIconBg, { backgroundColor: isDark ? colors.cardAlt : item.bg }]}>
         <Ionicons name={item.icon as any} size={24} color={item.color} />
       </View>
-      <Text style={[styles.gridLabel, { color: theme.categoryText }]} numberOfLines={1}>
-        {item.label}
-      </Text>
+      <Text style={[styles.gridLabel, { color: colors.textSub }]} numberOfLines={1}>{item.label}</Text>
     </TouchableOpacity>
   );
 
   const renderPlaceCard = ({ item }: { item: ApiListing }) => (
     <TouchableOpacity
-      style={[styles.placeCard, { backgroundColor: theme.cardBg }]}
+      style={[styles.placeCard, { backgroundColor: colors.card, borderColor: colors.border }, shadow.sm]}
       onPress={() => openListing(item.slug)}
-      activeOpacity={0.85}
+      activeOpacity={0.88}
     >
-      <Image source={{ uri: resolveImage(item.image) }} style={styles.placeImage} />
-      <View style={styles.cardOverlay} />
-      <View style={styles.cardTextContainer}>
-        {item.area ? (
-          <View style={styles.areaBadge}>
-            <Ionicons name="location-sharp" size={10} color="#FFFFFF" style={{ marginRight: 2 }} />
-            <Text style={styles.areaText} numberOfLines={1}>{item.area}</Text>
+      <View style={styles.placeImageWrap}>
+        <Image source={{ uri: resolveImage(item.image) }} style={styles.placeImage} />
+        {item.rating > 0 ? (
+          <View style={styles.placeRating}>
+            <RatingPill rating={item.rating} count={item.review_count} compact />
           </View>
         ) : null}
-        <Text style={styles.placeName} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.placePrice}>
+      </View>
+      <View style={styles.placeBody}>
+        {item.area ? (
+          <View style={styles.placeAreaRow}>
+            <Ionicons name="location-sharp" size={11} color={colors.primary} />
+            <Text style={[styles.placeArea, { color: colors.textSub }]} numberOfLines={1}>{item.area}</Text>
+          </View>
+        ) : null}
+        <Text style={[styles.placeName, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
+        <Text style={[styles.placePrice, { color: colors.accent }]}>
           {item.price > 0 ? formatPrice(item.price) : t('free')}
+          {item.price > 0 && item.price_unit ? (
+            <Text style={[styles.placeUnit, { color: colors.textMute }]}> / {item.price_unit}</Text>
+          ) : null}
         </Text>
       </View>
     </TouchableOpacity>
   );
 
-  const ListHeader = () => (
-    <View style={[styles.headerContainer, { paddingTop: insets.top + 8 }]}>
-      <View style={styles.searchBarRow}>
-        <View style={[styles.searchBarWrapper, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-          <Ionicons name="search-outline" size={18} color={theme.textSub} style={styles.searchIcon} />
-          <TextInput
-            style={[styles.searchInput, { color: theme.textMain }]}
-            placeholder={t('search_ph')}
-            placeholderTextColor={theme.textSub}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            returnKeyType="search"
-            onSubmitEditing={() =>
-              router.push({ pathname: '/things-to-do', params: { q: searchQuery } })
-            }
-          />
-        </View>
-      </View>
-
-      <View style={styles.categoriesGrid}>{gridItems.map(renderGridItem)}</View>
-
-      <View style={styles.rowHeader}>
-        <Text style={[styles.sectionTitle, { color: theme.textMain }]}>{t('recommended')}</Text>
-        <TouchableOpacity onPress={() => router.push('/things-to-do')}>
-          <Text style={[styles.seeMore, { color: theme.accent }]}>{t('see_all')}</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
+  const ListHeader = (
+    <HomeHeader
+      colors={colors}
+      shadow={shadow}
+      t={t}
+      firstName={firstName}
+      searchQuery={searchQuery}
+      setSearchQuery={setSearchQuery}
+      submitSearch={submitSearch}
+      featured={featured}
+      renderHero={renderHero}
+      openExplore={openExplore}
+      openAccount={() => router.push('/(tabs)/account')}
+      gridItems={gridItems}
+      renderGridItem={renderGridItem}
+    />
   );
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: theme.bg }]}>
-        <ActivityIndicator size="large" color={theme.accent} />
+      <View style={[styles.center, { backgroundColor: colors.bg }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
-  const listings = data?.recommended?.length ? data.recommended : data?.featured ?? [];
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <FlatList
+        style={{ flex: 1, paddingTop: insets.top + 6 }}
+        data={listings}
+        renderItem={renderPlaceCard}
+        keyExtractor={(item) => String(item.id)}
+        ListHeaderComponent={ListHeader}
+        numColumns={2}
+        columnWrapperStyle={styles.cardRowWrapper}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="none"
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[brand.primary]} />
+        }
+        ListEmptyComponent={
+          <EmptyState
+            icon={error ? 'cloud-offline-outline' : 'compass-outline'}
+            title={error ? 'Something went wrong' : 'No listings yet'}
+            subtitle={error || 'Add listings from the web admin to see them here.'}
+            actionLabel={error ? 'Retry' : undefined}
+            onAction={load}
+          />
+        }
+      />
+    </View>
+  );
+}
+
+type HomeHeaderProps = {
+  colors: ReturnType<typeof useTheme>['colors'];
+  shadow: ReturnType<typeof useTheme>['shadow'];
+  t: ReturnType<typeof usePreferences>['t'];
+  firstName: string;
+  searchQuery: string;
+  setSearchQuery: (value: string) => void;
+  submitSearch: () => void;
+  featured: ApiListing[];
+  renderHero: ({ item }: { item: ApiListing }) => React.ReactElement;
+  openExplore: () => void;
+  openAccount: () => void;
+  gridItems: { key: string; label: string; icon: string; bg: string; color: string; onPress: () => void }[];
+  renderGridItem: (item: { key: string; label: string; icon: string; bg: string; color: string; onPress: () => void }) => React.ReactElement;
+};
+
+const HERO_SNAP = HERO_WIDTH + 14;
+const AUTO_SCROLL_MS = 3500;
+
+// Auto-playing featured carousel: advances on a timer and loops back to the
+// first card after the last one. Pauses while the user is swiping, then resumes.
+function FeaturedCarousel({
+  data,
+  renderHero,
+}: {
+  data: ApiListing[];
+  renderHero: ({ item }: { item: ApiListing }) => React.ReactElement;
+}) {
+  const listRef = React.useRef<FlatList<ApiListing>>(null);
+  const indexRef = React.useRef(0);
+  const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stop = React.useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const start = React.useCallback(() => {
+    if (timerRef.current || data.length <= 1) return;
+    timerRef.current = setInterval(() => {
+      const next = indexRef.current + 1 >= data.length ? 0 : indexRef.current + 1;
+      indexRef.current = next;
+      listRef.current?.scrollToOffset({ offset: next * HERO_SNAP, animated: true });
+    }, AUTO_SCROLL_MS);
+  }, [data.length]);
+
+  React.useEffect(() => {
+    start();
+    return stop;
+  }, [start, stop]);
 
   return (
     <FlatList
-      style={[styles.container, { backgroundColor: theme.bg }]}
-      data={listings}
-      renderItem={renderPlaceCard}
-      keyExtractor={(item) => String(item.id)}
-      ListHeaderComponent={ListHeader}
-      numColumns={2}
-      columnWrapperStyle={styles.cardRowWrapper}
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.scrollContent}
-      refreshControl={<RefreshControl refreshing={false} onRefresh={load} tintColor={theme.accent} />}
-      ListEmptyComponent={
-        <View style={styles.emptyWrap}>
-          <Ionicons name={error ? 'cloud-offline-outline' : 'compass-outline'} size={40} color={theme.textSub} />
-          <Text style={[styles.emptyText, { color: theme.textSub }]}>
-            {error || 'No listings yet. Add listings from the web admin to see them here.'}
-          </Text>
-          {error ? (
-            <TouchableOpacity onPress={load} style={[styles.retryBtn, { backgroundColor: theme.accent }]}>
-              <Text style={styles.retryText}>Retry</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      }
+      ref={listRef}
+      data={data}
+      keyExtractor={(it) => `hero-${it.id}`}
+      renderItem={renderHero}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      snapToInterval={HERO_SNAP}
+      decelerationRate="fast"
+      contentContainerStyle={{ paddingRight: 16 }}
+      ItemSeparatorComponent={() => <View style={{ width: 14 }} />}
+      onScrollBeginDrag={stop}
+      onMomentumScrollEnd={(e) => {
+        indexRef.current = Math.round(e.nativeEvent.contentOffset.x / HERO_SNAP);
+        start();
+      }}
     />
   );
 }
 
+function HomeHeader({
+  colors,
+  shadow,
+  t,
+  firstName,
+  searchQuery,
+  setSearchQuery,
+  submitSearch,
+  featured,
+  renderHero,
+  openExplore,
+  openAccount,
+  gridItems,
+  renderGridItem,
+}: HomeHeaderProps) {
+  return (
+    <View style={styles.headerContainer}>
+      <View style={styles.greetRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.greetHello, { color: colors.textSub }]}>
+            {firstName ? `Hello, ${firstName} 👋` : 'Hello there 👋'}
+          </Text>
+          <View style={styles.locRow}>
+            <Ionicons name="location" size={15} color={colors.primary} />
+            <Text style={[styles.locText, { color: colors.text }]}>Cebu, Philippines</Text>
+          </View>
+        </View>
+        <TouchableOpacity
+          style={[styles.avatarBtn, { backgroundColor: colors.chipBg }]}
+          activeOpacity={0.8}
+          onPress={openAccount}
+        >
+          <Ionicons name="person" size={20} color={colors.primary} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }, shadow.sm]}>
+        <Ionicons name="search" size={19} color={colors.textMute} />
+        <TextInput
+          style={[styles.searchInput, { color: colors.text }]}
+          placeholder={t('search_ph')}
+          placeholderTextColor={colors.textMute}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          returnKeyType="search"
+          onSubmitEditing={submitSearch}
+        />
+        <TouchableOpacity onPress={submitSearch} style={[styles.searchGo, { backgroundColor: colors.primary }]} activeOpacity={0.85}>
+          <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
+        </TouchableOpacity>
+      </View>
+
+      {featured.length > 0 ? (
+        <View style={styles.featuredSection}>
+          <SectionHeader title="Featured experiences" actionLabel={t('see_all')} onAction={openExplore} />
+          <FeaturedCarousel data={featured.slice(0, 8)} renderHero={renderHero} />
+        </View>
+      ) : null}
+
+      <Text style={[styles.browseTitle, { color: colors.text }]}>Browse by category</Text>
+      <View style={styles.categoriesGrid}>{gridItems.map(renderGridItem)}</View>
+
+      <SectionHeader title={t('recommended')} actionLabel={t('see_all')} onAction={openExplore} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  scrollContent: { paddingBottom: 32 },
+  scrollContent: { paddingBottom: 36 },
   headerContainer: { paddingHorizontal: 16 },
-  searchBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  searchBarWrapper: {
-    flex: 1,
+
+  greetRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  greetHello: { fontSize: 14, fontWeight: '600' },
+  locRow: { flexDirection: 'row', alignItems: 'center', marginTop: 3 },
+  locText: { fontSize: 19, fontWeight: '800', marginLeft: 4, letterSpacing: -0.4 },
+  avatarBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 24,
+    borderRadius: 16,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    height: 42,
+    paddingLeft: 14,
+    paddingRight: 6,
+    height: 52,
+    marginBottom: 24,
   },
-  searchIcon: { marginRight: 6 },
-  searchInput: { flex: 1, fontSize: 15, padding: 0 },
-  categoriesGrid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 },
-  gridItem: { width: '25%', alignItems: 'center', marginBottom: 18 },
-  gridIconBg: { width: 56, height: 56, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 7 },
-  gridLabel: { fontSize: 11, fontWeight: '500', textAlign: 'center' },
-  rowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, marginBottom: 12 },
-  sectionTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3 },
-  seeMore: { fontSize: 13, fontWeight: '600' },
-  cardRowWrapper: { justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12 },
-  placeCard: { width: CARD_WIDTH, height: CARD_WIDTH * 1.25, borderRadius: 12, overflow: 'hidden' },
-  placeImage: { width: '100%', height: '100%', resizeMode: 'cover', backgroundColor: '#00000011' },
-  cardOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.28)' },
-  cardTextContainer: { position: 'absolute', bottom: 12, left: 12, right: 12 },
-  areaBadge: {
+  searchInput: { flex: 1, fontSize: 15, padding: 0, marginLeft: 8 },
+  searchGo: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+
+  featuredSection: { marginBottom: 24 },
+  heroCard: { height: 200, borderRadius: 22, overflow: 'hidden', backgroundColor: '#00000011' },
+  heroImage: { width: '100%', height: '100%', resizeMode: 'cover' },
+  heroTopRow: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 4,
-    marginBottom: 4,
+    justifyContent: 'space-between',
   },
-  areaText: { color: '#FFFFFF', fontSize: 10, fontWeight: '500' },
-  placeName: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
-  placePrice: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', marginTop: 2 },
-  emptyWrap: { alignItems: 'center', paddingHorizontal: 30, paddingTop: 40 },
-  emptyText: { fontSize: 14, textAlign: 'center', marginTop: 12, lineHeight: 20 },
-  retryBtn: { marginTop: 16, paddingVertical: 10, paddingHorizontal: 28, borderRadius: 10 },
-  retryText: { color: '#FFFFFF', fontWeight: '700' },
+  featuredTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FF6A3D',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  featuredTagText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  heroBottom: { position: 'absolute', left: 14, right: 14, bottom: 14 },
+  heroAreaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  heroArea: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '600', marginLeft: 3 },
+  heroTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', letterSpacing: -0.3 },
+  heroPrice: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', marginTop: 4 },
+
+  browseTitle: { fontSize: 18, fontWeight: '800', letterSpacing: -0.4, marginBottom: 14 },
+  categoriesGrid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 },
+  gridItem: { width: '25%', alignItems: 'center', marginBottom: 18 },
+  gridIconBg: { width: 58, height: 58, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  gridLabel: { fontSize: 11, fontWeight: '600', textAlign: 'center' },
+
+  cardRowWrapper: { justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 14 },
+  placeCard: { width: CARD_WIDTH, borderRadius: 18, overflow: 'hidden', borderWidth: 1 },
+  placeImageWrap: { width: '100%', height: CARD_WIDTH * 0.82 },
+  placeImage: { width: '100%', height: '100%', resizeMode: 'cover', backgroundColor: '#00000011' },
+  placeRating: { position: 'absolute', top: 8, left: 8 },
+  placeBody: { padding: 10 },
+  placeAreaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3 },
+  placeArea: { fontSize: 11, fontWeight: '600', marginLeft: 3, flex: 1 },
+  placeName: { fontSize: 14, fontWeight: '800', letterSpacing: -0.2, lineHeight: 18 },
+  placePrice: { fontSize: 14, fontWeight: '800', marginTop: 6 },
+  placeUnit: { fontSize: 11, fontWeight: '600' },
 });

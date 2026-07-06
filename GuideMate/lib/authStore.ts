@@ -120,14 +120,20 @@ export async function getSession(): Promise<SessionUser | null> {
   }
 }
 
+// Clear the cached token + user locally, without hitting the API. Used when the
+// server reports the token is expired/invalid (a network logout would just fail).
+export async function clearSession(): Promise<void> {
+  setAuthToken(null);
+  await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+}
+
 export async function logout(): Promise<void> {
   try {
     await apiLogout();
   } catch {
     // ignore network errors on logout
   }
-  setAuthToken(null);
-  await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+  await clearSession();
 }
 
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {

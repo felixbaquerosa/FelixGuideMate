@@ -1,0 +1,162 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Controllers;
+
+use App\Core\Auth;
+use App\Core\Controller;
+use App\Core\Geo;
+use App\Models\Booking;
+use App\Models\Category;
+use App\Models\Favorite;
+use App\Models\Listing;
+use App\Models\Review;
+use App\Models\ReviewImage;
+use App\Services\WeatherService;
+
+final class ListingController extends Controller
+{
+    public function index(): void
+    {
+        $this->renderBrowse(null, 'Explore Cebu', 'All tours, guides, stays and restaurants across Cebu.');
+    }
+
+    public function thingsToDo(): void
+    {
+        $this->renderBrowse('things-to-do', 'Things to Do in Cebu', 'Tours, attractions and unforgettable activities.');
+    }
+
+    public function tourGuides(): void
+    {
+        $this->renderBrowse('tour-guides', 'Tour Guides in Cebu', 'Hire trusted, local Cebuano guides.');
+    }
+
+    public function hotels(): void
+    {
+        $this->renderBrowse('hotels', 'Hotels & Stays in Cebu', 'Resorts, hotels and places to stay.');
+    }
+
+    public function restaurants(): void
+    {
+        $this->renderBrowse('restaurants', 'Restaurants in Cebu', 'Where to eat — from lechon to fine dining.');
+    }
+
+    private function renderBrowse(?string $categorySlug, string $heading, string $sub): void
+    {
+        $filters = [
+            'q' => (string) $this->input('q', ''),
+            'area' => (string) $this->input('area', ''),
+            'category' => $categorySlug ?? (string) $this->input('category', ''),
+            'sort' => (string) $this->input('sort', ''),
+            'min_rating' => (string) $this->input('min_rating', ''),
+        ];
+
+        $listings = Listing::search($filters);
+        $favIds = Auth::check() ? Favorite::idsForUser((int) Auth::id()) : [];
+
+        $mapListings = [];
+        $userId = Auth::id();
+        if ($userId !== null && $categorySlug !== null) {
+            $mapListings = Booking::mapListingsForCustomer($userId, $categorySlug);
+        }
+
+        $this->view('listings/browse', [
+            'title' => $heading,
+            'heading' => $heading,
+            'sub' => $sub,
+            'listings' => $listings,
+            'mapListings' => $mapListings,
+            'categories' => Category::all(),
+            'filters' => $filters,
+            'activeCategory' => $categorySlug,
+            'favIds' => $favIds,
+        ]);
+    }
+
+    public function show(string $slug): void
+    {
+        $listing = Listing::findBySlug($slug);
+        if ($listing === null || $listing['status'] !== 'approved') {
+            // Allow the owner/admin to preview non-approved listings.
+            $user = Auth::user();
+            $isOwner = $user && $listing && (int) $listing['user_id'] === (int) $user['id'];
+            if ($listing === null || (!$isOwner && !Auth::isAdmin())) {
+                abort(404, 'This listing is not available.');
+            }
+        }
+
+        $listingId = (int) $listing['id'];
+        $userId = Auth::id();
+        $isOwner = $userId !== null && (int) $listing['user_id'] === $userId;
+        $canSeeMapLocation = $isOwner
+            || Auth::isAdmin()
+            || ($userId !== null && Booking::hasActivePaidBooking($listingId, $userId));
+
+        $reviews = Review::forListing($listingId);
+        foreach ($reviews as &$r) {
+            $r['images'] = ReviewImage::forReview((int) $r['id']);
+        }
+        unset($r);
+
+        $mapCoords = Geo::forListing($listing);
+        if ($canSeeMapLocation && $mapCoords !== null) {
+            $listing['latitude'] = $mapCoords['latitude'];
+            $listing['longitude'] = $mapCoords['longitude'];
+        }
+
+        $this->view('listings/show', [
+            'title' => $listing['title'],
+            'listing' => $listing,
+            'gallery' => Listing::gallery($listingId),
+            'reviews' => $reviews,
+            'summary' => Review::summary($listingId),
+            'weather' => WeatherService::forListing(
+                $mapCoords !== null ? (float) $mapCoords['latitude'] : (isset($listing['latitude']) ? (float) $listing['latitude'] : null),
+                $mapCoords !== null ? (float) $mapCoords['longitude'] : (isset($listing['longitude']) ? (float) $listing['longitude'] : null),
+                (string) ($listing['area'] ?? '')
+            ),
+            'guideBadge' => guide_badge((int) $listing['user_id']),
+            'displayPrice' => Listing::effectivePrice($listing),
+            'canReview' => $userId !== null
+                && Booking::hasCompletedBooking($listingId, $userId)
+                && !Review::userHasReviewed($listingId, $userId),
+            'isFavorited' => $userId !== null && Favorite::exists($userId, $listingId),
+            'bookedDates' => Booking::bookedDates($listingId),
+            'canSeeMapLocation' => $canSeeMapLocation,
+            'errors' => errors(),
+        ]);
+    }
+
+    public function favorites(): void
+    {
+        $this->view('listings/favorites', [
+            'title' => 'Saved',
+            'listings' => Favorite::forUser((int) Auth::id()),
+            'favIds' => Favorite::idsForUser((int) Auth::id()),
+        ]);
+    }
+
+    public function toggleFavorite(): void
+    {
+        $isAjax = ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest';
+
+        if (!Auth::check()) {
+            if ($isAjax) {
+                $this->json(['authenticated' => false, 'redirect' => url('/login')]);
+                return;
+            }
+            redirect('/login');
+        }
+
+        $this->verifyCsrf();
+        $listingId = (int) $this->input('listing_id', 0);
+        $favorited = Favorite::toggle((int) Auth::id(), $listingId);
+
+        if ($isAjax) {
+            $this->json(['favorited' => $favorited, 'authenticated' => true]);
+            return;
+        }
+        redirect('/favorites');
+    }
+}

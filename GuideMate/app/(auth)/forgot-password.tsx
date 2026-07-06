@@ -2,9 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
+    ActivityIndicator,
+    Alert,
     Dimensions,
     ImageBackground,
     KeyboardAvoidingView,
+    Linking,
     Platform,
     SafeAreaView,
     StatusBar,
@@ -15,6 +18,7 @@ import {
     useColorScheme,
     View,
 } from 'react-native';
+import { apiForgotPassword } from '../../services/api';
 
 const { height } = Dimensions.get('window');
 
@@ -25,6 +29,11 @@ export default function ForgotPasswordScreen() {
 
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [devResetUrl, setDevResetUrl] = useState<string | null>(null);
+
+  const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
   // Dynamic colors mapping based on system device theme
   const theme = {
@@ -40,9 +49,35 @@ export default function ForgotPasswordScreen() {
     router.back();
   };
 
-  const handleSend = () => {
-    if (email.trim()) {
+  const handleSend = async () => {
+    const trimmed = email.trim();
+    if (!isValidEmail(trimmed)) {
+      Alert.alert('Invalid email', 'Please enter a valid email address.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await apiForgotPassword(trimmed);
+      setStatusMessage(res.message);
+      setDevResetUrl(res.dev_reset_url ?? null);
       setSent(true);
+    } catch (err) {
+      Alert.alert(
+        'Something went wrong',
+        err instanceof Error ? err.message : 'Could not send the reset link. Please try again.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenResetLink = async () => {
+    if (!devResetUrl) return;
+    try {
+      await Linking.openURL(devResetUrl);
+    } catch {
+      Alert.alert('Unable to open link', devResetUrl);
     }
   };
 
@@ -105,8 +140,17 @@ export default function ForgotPasswordScreen() {
             </View>
 
             {/* Send Reset Link button */}
-            <TouchableOpacity style={[styles.sendButton, { backgroundColor: theme.accent }]} onPress={handleSend} activeOpacity={0.85}>
-              <Text style={styles.sendButtonText}>Send Reset Link</Text>
+            <TouchableOpacity
+              style={[styles.sendButton, { backgroundColor: theme.accent, opacity: loading ? 0.7 : 1 }]}
+              onPress={handleSend}
+              activeOpacity={0.85}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.sendButtonText}>Send Reset Link</Text>
+              )}
             </TouchableOpacity>
 
             {/* Back to login */}
@@ -123,10 +167,23 @@ export default function ForgotPasswordScreen() {
             </View>
             <Text style={[styles.sectionLabel, { color: theme.textMain }]}>Check your email</Text>
             <Text style={[styles.instructionText, { color: theme.textSub }]}>
-              We've sent a password reset link to{' '}
-              <Text style={[styles.emailHighlight, { color: theme.textMain }]}>{email}</Text>.{' '}
-              Please check your inbox and follow the instructions.
+              {statusMessage
+                ? statusMessage
+                : `We've sent a password reset link to ${email}. Please check your inbox and follow the instructions.`}
             </Text>
+
+            {devResetUrl ? (
+              <TouchableOpacity
+                style={[styles.devLinkBox, { borderColor: theme.accent }]}
+                onPress={handleOpenResetLink}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="open-outline" size={16} color={theme.accent} style={{ marginRight: 8 }} />
+                <Text style={[styles.devLinkText, { color: theme.accent }]} numberOfLines={1}>
+                  Open reset link now
+                </Text>
+              </TouchableOpacity>
+            ) : null}
 
             {/* Back to login */}
             <TouchableOpacity style={[styles.sendButton, { backgroundColor: theme.accent }]} onPress={handleBackToLogin} activeOpacity={0.85}>
@@ -276,5 +333,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
     marginTop: 8,
+  },
+  devLinkBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderRadius: 50,
+    paddingVertical: 13,
+    paddingHorizontal: 20,
+    marginBottom: 16,
+  },
+  devLinkText: {
+    fontSize: 14,
+    fontWeight: '700',
   },
 });
