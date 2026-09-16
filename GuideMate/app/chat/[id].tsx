@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { usePreferences } from '../../lib/preferences';
 import { useTheme } from '../../lib/theme';
 import {
   ApiChatPartner,
@@ -43,6 +44,7 @@ export default function ChatScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
+  const { language, t } = usePreferences();
   const params = useLocalSearchParams<{ id: string }>();
   const partnerId = Number(params.id);
 
@@ -53,6 +55,13 @@ export default function ChatScreen() {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
 
+  // Auto-translate the guide's replies into the reader's app language.
+  const [autoTranslate, setAutoTranslate] = useState(true);
+  // Message ids the reader chose to view in the original language.
+  const [showOriginal, setShowOriginal] = useState<Set<number>>(new Set());
+
+  const translateLang = autoTranslate ? language : undefined;
+
   const listRef = useRef<FlatList<ApiMessage>>(null);
   const lastIdRef = useRef(0);
 
@@ -62,7 +71,7 @@ export default function ChatScreen() {
 
   const loadInitial = useCallback(async () => {
     try {
-      const data = await getThread(partnerId);
+      const data = await getThread(partnerId, translateLang);
       setPartner(data.partner);
       setOnline(data.partner.online);
       setMessages(data.messages);
@@ -73,11 +82,11 @@ export default function ChatScreen() {
     } finally {
       setLoading(false);
     }
-  }, [partnerId, scrollToEnd]);
+  }, [partnerId, translateLang, scrollToEnd]);
 
   const poll = useCallback(async () => {
     try {
-      const data = await pollThread(partnerId, lastIdRef.current);
+      const data = await pollThread(partnerId, lastIdRef.current, translateLang);
       setOnline(data.partner_online);
       if (data.new.length) {
         setMessages((prev) => [...prev, ...data.new]);
@@ -91,7 +100,7 @@ export default function ChatScreen() {
     } catch {
       // transient — try again next tick
     }
-  }, [partnerId, scrollToEnd]);
+  }, [partnerId, translateLang, scrollToEnd]);
 
   useEffect(() => {
     loadInitial();
@@ -121,26 +130,54 @@ export default function ChatScreen() {
     }
   };
 
-  const renderItem = ({ item }: { item: ApiMessage }) => (
-    <View style={[styles.bubbleRow, { justifyContent: item.mine ? 'flex-end' : 'flex-start' }]}>
-      <View
-        style={[
-          styles.bubble,
-          item.mine
-            ? { backgroundColor: colors.primary, borderBottomRightRadius: 4 }
-            : { backgroundColor: colors.card, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: colors.border },
-        ]}
-      >
-        <Text style={[styles.bubbleText, { color: item.mine ? '#FFFFFF' : colors.text }]}>{item.body}</Text>
-        <View style={styles.metaRow}>
-          <Text style={[styles.metaTime, { color: item.mine ? 'rgba(255,255,255,0.75)' : colors.textMute }]}>
-            {bubbleTime(item.created_at)}
-          </Text>
-          {item.mine ? <View style={{ marginLeft: 4 }}><StatusTick status={item.status} color="rgba(255,255,255,0.8)" /></View> : null}
+  const toggleOriginal = (id: number) => {
+    setShowOriginal((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const renderItem = ({ item }: { item: ApiMessage }) => {
+    const hasTranslation = !!item.translated && !!item.translated_body;
+    const viewingOriginal = showOriginal.has(item.id);
+    const displayBody = hasTranslation && !viewingOriginal ? item.translated_body! : item.body;
+
+    return (
+      <View style={[styles.bubbleRow, { justifyContent: item.mine ? 'flex-end' : 'flex-start' }]}>
+        <View
+          style={[
+            styles.bubble,
+            item.mine
+              ? { backgroundColor: colors.primary, borderBottomRightRadius: 4 }
+              : { backgroundColor: colors.card, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.bubbleText, { color: item.mine ? '#FFFFFF' : colors.text }]}>{displayBody}</Text>
+
+          {hasTranslation ? (
+            <TouchableOpacity
+              onPress={() => toggleOriginal(item.id)}
+              activeOpacity={0.7}
+              style={styles.translateToggle}
+            >
+              <Ionicons name="language-outline" size={12} color={colors.primary} />
+              <Text style={[styles.translateToggleText, { color: colors.primary }]}>
+                {viewingOriginal ? t('show_translation') : t('show_original')}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <View style={styles.metaRow}>
+            <Text style={[styles.metaTime, { color: item.mine ? 'rgba(255,255,255,0.75)' : colors.textMute }]}>
+              {bubbleTime(item.created_at)}
+            </Text>
+            {item.mine ? <View style={{ marginLeft: 4 }}><StatusTick status={item.status} color="rgba(255,255,255,0.8)" /></View> : null}
+          </View>
         </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bgAlt }]} edges={['left', 'right']}>
@@ -166,6 +203,13 @@ export default function ChatScreen() {
           </Text>
         </View>
 
+        <TouchableOpacity
+          style={styles.iconBtn}
+          activeOpacity={0.7}
+          onPress={() => setAutoTranslate((v) => !v)}
+        >
+          <Ionicons name="language" size={21} color={autoTranslate ? colors.primary : colors.textMute} />
+        </TouchableOpacity>
         <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => router.push(`/call/${partnerId}?video=0&name=${encodeURIComponent(partner?.name ?? '')}`)}>
           <Ionicons name="call" size={21} color={colors.primary} />
         </TouchableOpacity>
@@ -235,6 +279,8 @@ const styles = StyleSheet.create({
   bubbleRow: { flexDirection: 'row', marginBottom: 8 },
   bubble: { maxWidth: '78%', borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9 },
   bubbleText: { fontSize: 15, lineHeight: 20 },
+  translateToggle: { flexDirection: 'row', alignItems: 'center', marginTop: 5 },
+  translateToggleText: { fontSize: 11, fontWeight: '700', marginLeft: 4 },
   metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 3 },
   metaTime: { fontSize: 10, fontWeight: '600' },
   inputBar: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 12, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },

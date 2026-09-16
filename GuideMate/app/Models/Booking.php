@@ -9,13 +9,24 @@ use App\Core\Geo;
 
 final class Booking
 {
-    public static function create(int $listingId, int $userId, string $date, int $guests, float $total, string $notes): int
+    /**
+     * Selectable start times (24h) offered by the mobile booking form. Kept in
+     * sync with TIME_SLOTS in app/listing/[slug].tsx so a whole-day lock (guide
+     * availability or a legacy time-less booking) can be expressed as slots.
+     */
+    public const TIME_SLOTS = [
+        '06:00', '07:00', '08:00', '09:00', '10:00', '11:00',
+        '12:00', '13:00', '14:00', '15:00', '16:00', '17:00',
+        '18:00', '19:00', '20:00',
+    ];
+
+    public static function create(int $listingId, int $userId, string $date, int $guests, float $total, string $notes, ?string $time = null): int
     {
         $token = bin2hex(random_bytes(16));
         $id = Database::insert(
-            'INSERT INTO bookings (listing_id, user_id, booking_date, guests, total_amount, notes, verify_token)
-             VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [$listingId, $userId, $date, $guests, $total, $notes, $token]
+            'INSERT INTO bookings (listing_id, user_id, booking_date, booking_time, guests, total_amount, notes, verify_token)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [$listingId, $userId, $date, ($time !== null && $time !== '' ? $time : null), $guests, $total, $notes, $token]
         );
         return $id;
     }
@@ -313,6 +324,197 @@ final class Booking
     }
 
     /**
+     * Upcoming date + start-time slots already taken for a listing, so the
+     * mobile booking form can disable them. A booking with no stored time (older
+     * data) and any guide-blocked date lock the whole day, expressed as every
+     * standard slot for that date.
+     *
+     * @return array<int, array{date: string, time: string}>
+     */
+    public static function bookedSlots(int $listingId): array
+    {
+        $rows = Database::all(
+            'SELECT booking_date, booking_time FROM bookings
+             WHERE listing_id = ? AND status IN ("confirmed","completed") AND booking_date >= CURDATE()',
+            [$listingId]
+        );
+
+        $slots = [];
+        $seen = [];
+        $add = static function (string $date, string $time) use (&$slots, &$seen): void {
+            $key = $date . '|' . $time;
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $slots[] = ['date' => $date, 'time' => $time];
+            }
+        };
+
+        foreach ($rows as $row) {
+            $date = (string) $row['booking_date'];
+            $time = trim((string) ($row['booking_time'] ?? ''));
+            if ($time === '') {
+                foreach (self::TIME_SLOTS as $slot) {
+                    $add($date, $slot);
+                }
+            } else {
+                $add($date, substr($time, 0, 5));
+            }
+        }
+
+        // Dates the guide manually blocked are fully unavailable.
+        foreach (GuideAvailability::blockedDates($listingId) as $blocked) {
+            foreach (self::TIME_SLOTS as $slot) {
+                $add((string) $blocked, $slot);
+            }
+        }
+
+        return $slots;
+    }
+
+    /**
+     * Is this exact date + start-time slot already taken by a paid booking? A
+     * guide-blocked date counts as fully booked.
+     */
+    public static function isSlotBooked(int $listingId, string $date, string $time, ?int $excludeBookingId = null): bool
+    {
+        if (GuideAvailability::isBlocked($listingId, $date)) {
+            return true;
+        }
+        $time = substr(trim($time), 0, 5);
+        $sql = 'SELECT id FROM bookings
+                WHERE listing_id = ? AND booking_date = ? AND status IN ("confirmed","completed")
+                  AND (booking_time = ? OR booking_time IS NULL OR booking_time = "")';
+        $params = [$listingId, $date, $time];
+        if ($excludeBookingId !== null) {
+            $sql .= ' AND id <> ?';
+            $params[] = $excludeBookingId;
+        }
+        return Database::first($sql, $params) !== null;
+    }
+
+    /**
+     * Upcoming date + start-time slots where the GUIDE is unavailable — across
+     * every listing they own, plus any dates they manually blocked. A guide can
+     * only run one tour at a time, so a slot booked on one of their listings
+     * makes them unavailable on all the others (prevents double-booking).
+     *
+     * @return array<int, array{date: string, time: string}>
+     */
+    public static function guideBookedSlots(int $guideId): array
+    {
+        $rows = Database::all(
+            'SELECT b.booking_date, b.booking_time
+             FROM bookings b
+             JOIN listings l ON l.id = b.listing_id
+             WHERE l.user_id = ? AND b.status IN ("confirmed","completed") AND b.booking_date >= CURDATE()',
+            [$guideId]
+        );
+
+        $slots = [];
+        $seen = [];
+        $add = static function (string $date, string $time) use (&$slots, &$seen): void {
+            $key = $date . '|' . $time;
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $slots[] = ['date' => $date, 'time' => $time];
+            }
+        };
+
+        foreach ($rows as $row) {
+            $date = (string) $row['booking_date'];
+            $time = trim((string) ($row['booking_time'] ?? ''));
+            if ($time === '') {
+                foreach (self::TIME_SLOTS as $slot) {
+                    $add($date, $slot);
+                }
+            } else {
+                $add($date, substr($time, 0, 5));
+            }
+        }
+
+        // Dates the guide manually blocked on any of their listings.
+        $blocked = Database::all(
+            'SELECT DISTINCT ga.blocked_date
+             FROM guide_availability ga
+             JOIN listings l ON l.id = ga.listing_id
+             WHERE l.user_id = ? AND ga.blocked_date >= CURDATE()',
+            [$guideId]
+        );
+        foreach ($blocked as $b) {
+            foreach (self::TIME_SLOTS as $slot) {
+                $add((string) $b['blocked_date'], $slot);
+            }
+        }
+
+        return $slots;
+    }
+
+    /**
+     * Is the GUIDE (owner) already taken for this date + start-time slot on any
+     * of their listings? Used to stop a second tourist double-booking the guide.
+     */
+    public static function isGuideSlotBooked(int $guideId, string $date, string $time, ?int $excludeBookingId = null): bool
+    {
+        $time = substr(trim($time), 0, 5);
+        $sql = 'SELECT b.id FROM bookings b
+                JOIN listings l ON l.id = b.listing_id
+                WHERE l.user_id = ? AND b.booking_date = ? AND b.status IN ("confirmed","completed")
+                  AND (b.booking_time = ? OR b.booking_time IS NULL OR b.booking_time = "")';
+        $params = [$guideId, $date, $time];
+        if ($excludeBookingId !== null) {
+            $sql .= ' AND b.id <> ?';
+            $params[] = $excludeBookingId;
+        }
+        if (Database::first($sql, $params) !== null) {
+            return true;
+        }
+        // A manual block on any of the guide's listings locks the whole day.
+        return Database::first(
+            'SELECT ga.id FROM guide_availability ga
+             JOIN listings l ON l.id = ga.listing_id
+             WHERE l.user_id = ? AND ga.blocked_date = ?',
+            [$guideId, $date]
+        ) !== null;
+    }
+
+    /**
+     * Is the GUIDE taken anywhere on this date (for time-less/whole-day bookings)?
+     */
+    public static function isGuideDateBooked(int $guideId, string $date): bool
+    {
+        if (Database::first(
+            'SELECT b.id FROM bookings b
+             JOIN listings l ON l.id = b.listing_id
+             WHERE l.user_id = ? AND b.booking_date = ? AND b.status IN ("confirmed","completed")',
+            [$guideId, $date]
+        ) !== null) {
+            return true;
+        }
+        return Database::first(
+            'SELECT ga.id FROM guide_availability ga
+             JOIN listings l ON l.id = ga.listing_id
+             WHERE l.user_id = ? AND ga.blocked_date = ?',
+            [$guideId, $date]
+        ) !== null;
+    }
+
+    /**
+     * Is the guide currently on a tour today? True while they have a confirmed
+     * (paid, not yet completed) booking dated today. Once the tour is marked
+     * completed — or the day passes — the guide is available again. Drives the
+     * "Available / On a tour" badge in the Tour Guides directory.
+     */
+    public static function isGuideBusyToday(int $guideId): bool
+    {
+        return Database::first(
+            'SELECT b.id FROM bookings b
+             JOIN listings l ON l.id = b.listing_id
+             WHERE l.user_id = ? AND b.booking_date = CURDATE() AND b.status = "confirmed"',
+            [$guideId]
+        ) !== null;
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     public static function dueReminders(): array
@@ -369,6 +571,25 @@ final class Booking
             [$guideId]
         );
         return (float) ($row['total'] ?? 0);
+    }
+
+    /**
+     * Paid earnings per month for a single guide (for the dashboard chart).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function earningsPerMonth(int $guideId, int $months = 6): array
+    {
+        return Database::all(
+            'SELECT DATE_FORMAT(b.created_at, "%Y-%m") AS month, COALESCE(SUM(b.total_amount),0) AS total
+             FROM bookings b
+             JOIN listings l ON l.id = b.listing_id
+             JOIN payments p ON p.booking_id = b.id
+             WHERE l.user_id = ? AND p.status = "paid" AND b.status IN ("confirmed", "completed")
+               AND b.created_at >= DATE_SUB(CURDATE(), INTERVAL ? MONTH)
+             GROUP BY month ORDER BY month ASC',
+            [$guideId, $months]
+        );
     }
 
     /**

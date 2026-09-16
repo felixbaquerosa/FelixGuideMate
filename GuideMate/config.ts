@@ -28,3 +28,41 @@ function detectDevHost(): string {
 export const API_BASE_URL = __DEV__
   ? `http://${detectDevHost()}/GuideMate/public`
   : PROD_API_BASE_URL;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Social sign-in (Google / Facebook)
+//
+// PLUG-AND-PLAY: as soon as you paste a real client ID / app ID below, that
+// button opens the REAL Google/Facebook login (the user signs into their own
+// account). Until then, `demo: true` lets the button work with an anonymous
+// demo account so you can still show the flow. No flag to flip.
+//
+// The backend never receives or stores a real email or password either way.
+//
+//   • Google client ID:  https://console.cloud.google.com/apis/credentials
+//       - For a dev build / store build: create an Android + iOS OAuth client.
+//       - Use the app's redirect scheme "guidemate" (see app.json).
+//   • Facebook app ID:   https://developers.facebook.com/apps
+//
+// Also mirror these on the PHP backend's .env (GOOGLE_OAUTH_CLIENT_IDS /
+// FACEBOOK_APP_ID) so it can verify the audience of the real tokens.
+// ─────────────────────────────────────────────────────────────────────────────
+export const SOCIAL_AUTH = {
+  demo: true, // fallback only — ignored for a provider once configured below
+  googleClientIds: {
+    expo: '', // Web-type client id (Expo Go / web)
+    ios: '', // paste your iOS OAuth client id here for iOS dev/store builds
+    android: '', // paste your Android OAuth client id here for Android dev/store builds
+    web: '594984195783-95p4qciig7ghg2jtok9a709ov8k0embh.apps.googleusercontent.com',
+  },
+  // Paste your Facebook App ID here to switch Facebook from demo to the real
+  // backend-mediated login (the actual OAuth uses the backend .env secret).
+  facebookAppId: '',
+
+  // Expo Go-compatible Google/Facebook login is mediated by your PHP backend.
+  // Because the providers require a PUBLIC https redirect, set this to your
+  // tunnel URL (e.g. https://xxxx.trycloudflare.com/GuideMate/public). When
+  // empty, the LAN API_BASE_URL is used (fine on web, but the providers won't
+  // redirect to a LAN IP).
+  backendPublicUrl: '',
+};

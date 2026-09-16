@@ -26,7 +26,12 @@
                         </div>
                     </td>
                     <td class="col-email">
-                        <span class="table-user-email" title="<?= e($u['email']) ?>"><?= e($u['email']) ?></span>
+                        <?php if (!empty($u['oauth_provider'])): ?>
+                            <?php $prov = $u['oauth_provider'] === 'facebook' ? 'Facebook' : 'Google'; ?>
+                            <span class="table-user-email" title="Signed in with <?= e($prov) ?> — email kept private">🔒 <?= e($prov) ?> account (private)</span>
+                        <?php else: ?>
+                            <span class="table-user-email" title="<?= e($u['email']) ?>"><?= e($u['email']) ?></span>
+                        <?php endif; ?>
                     </td>
                     <td class="col-role"><span class="pill pill-<?= $u['role'] === 'admin' ? 'completed' : ($u['role'] === 'guide' ? 'confirmed' : 'pending') ?>"><?= e(ucfirst($u['role'])) ?></span></td>
                     <td class="col-joined"><?= e(date('M j, Y', strtotime($u['created_at']))) ?></td>

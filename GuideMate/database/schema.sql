@@ -17,14 +17,15 @@ CREATE TABLE `users` (
     `name`        VARCHAR(120) NOT NULL,
     `email`       VARCHAR(190) NOT NULL,
     `password`    VARCHAR(255) NOT NULL,
-    `role`        ENUM('admin','guide','tourist') NOT NULL DEFAULT 'tourist',
+    `role`        ENUM('admin','guide','tourist','rental_admin','hotel_admin') NOT NULL DEFAULT 'tourist',
     `phone`       VARCHAR(40)  DEFAULT NULL,
     `avatar`      VARCHAR(255) DEFAULT NULL,
     `bio`         TEXT         DEFAULT NULL,
     `location`    VARCHAR(120) DEFAULT NULL,
     `is_active`   TINYINT(1)   NOT NULL DEFAULT 1,
-    -- Guide verification workflow: tourists/admins stay 'none'; guides start
-    -- 'pending' until an admin reviews their submitted documents.
+    -- Provider verification workflow: tourists/admins stay 'none'; guides,
+    -- rental admins and hotel admins start 'pending' until an admin reviews
+    -- their submitted documents.
     `guide_status`      ENUM('none','pending','approved','rejected') NOT NULL DEFAULT 'none',
     `guide_review_note` VARCHAR(500) DEFAULT NULL,
     `guide_reviewed_at` TIMESTAMP    NULL DEFAULT NULL,

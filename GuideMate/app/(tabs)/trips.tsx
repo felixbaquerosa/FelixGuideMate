@@ -129,6 +129,40 @@ export default function TripsScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {item.can_review || item.can_report || item.dispute_status ? (
+            <View style={styles.actionsRow}>
+              {item.can_review ? (
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: colors.primary }]}
+                  activeOpacity={0.85}
+                  onPress={() => router.push({ pathname: '/review/[id]', params: { id: String(item.listing_id), title: item.listing_title } })}
+                >
+                  <Ionicons name="star-outline" size={14} color={colors.primary} />
+                  <Text style={[styles.actionText, { color: colors.primary }]}>Rate your guide</Text>
+                </TouchableOpacity>
+              ) : null}
+              {item.dispute_status ? (
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: colors.textMute }]}
+                  activeOpacity={0.85}
+                  onPress={() => router.push({ pathname: '/report/[id]', params: { id: String(item.id), title: item.listing_title } })}
+                >
+                  <Ionicons name="flag" size={14} color={colors.textMute} />
+                  <Text style={[styles.actionText, { color: colors.textMute }]}>View report</Text>
+                </TouchableOpacity>
+              ) : item.can_report ? (
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: '#EF4444' }]}
+                  activeOpacity={0.85}
+                  onPress={() => router.push({ pathname: '/report/[id]', params: { id: String(item.id), title: item.listing_title } })}
+                >
+                  <Ionicons name="flag-outline" size={14} color="#EF4444" />
+                  <Text style={[styles.actionText, { color: '#EF4444' }]}>Report a problem</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </TouchableOpacity>
     );
@@ -191,6 +225,9 @@ const styles = StyleSheet.create({
   price: { fontSize: 16, fontWeight: '900' },
   navBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999 },
   navBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  actionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  actionText: { fontSize: 12, fontWeight: '800' },
   statusChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusText: { fontSize: 11, fontWeight: '800', textTransform: 'capitalize' },

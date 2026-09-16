@@ -7,11 +7,20 @@ type Status = 'idle' | 'verifying' | 'verified';
 type Props = {
   isDark: boolean;
   onVerifiedChange: (verified: boolean) => void;
+  label?: string;
+  verifyingLabel?: string;
+  successLabel?: string;
 };
 
 // Cloudflare Turnstile–style "Verify you are human" widget.
 // Tapping the checkbox shows a short "Verifying..." spinner, then a success state.
-export default function HumanVerification({ isDark, onVerifiedChange }: Props) {
+export default function HumanVerification({
+  isDark,
+  onVerifiedChange,
+  label = 'Verify you are human',
+  verifyingLabel = 'Verifying...',
+  successLabel = 'Success!',
+}: Props) {
   const [status, setStatus] = useState<Status>('idle');
 
   const theme = {
@@ -47,8 +56,8 @@ export default function HumanVerification({ isDark, onVerifiedChange }: Props) {
           {status === 'verified' && <Ionicons name="checkmark" size={18} color={theme.accent} />}
         </TouchableOpacity>
 
-        <Text style={[styles.label, { color: theme.text }]}>
-          {status === 'verifying' ? 'Verifying...' : status === 'verified' ? 'Success!' : 'Verify you are human'}
+        <Text style={[styles.label, { color: theme.text }]} numberOfLines={2}>
+          {status === 'verifying' ? verifyingLabel : status === 'verified' ? successLabel : label}
         </Text>
       </View>
 
@@ -72,6 +81,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   left: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -85,12 +95,15 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   label: {
+    flex: 1,
     fontSize: 14,
     fontWeight: '600',
   },
   right: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
+    marginLeft: 10,
   },
   brand: {
     fontSize: 9,

@@ -3,6 +3,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import FavoriteHeart from '../../components/FavoriteHeart';
 import { EmptyState, RatingPill, ScreenTitle } from '../../components/ui';
 import { clearSession, restoreSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
@@ -80,9 +81,16 @@ export default function WishlistScreen() {
           {item.price > 0 ? formatPrice(item.price) : t('free')}
         </Text>
       </View>
-      <View style={[styles.heartWrap, { backgroundColor: isDark ? colors.cardAlt : '#FEE2E2' }]}>
-        <Ionicons name="heart" size={18} color="#EF4444" />
-      </View>
+      <FavoriteHeart
+        listingId={item.id}
+        favorited
+        size={36}
+        style={styles.heartWrap}
+        onChange={(fav) => {
+          // Tapping the heart here un-saves it — drop it from the list.
+          if (!fav) setListings((prev) => prev.filter((l) => l.id !== item.id));
+        }}
+      />
     </TouchableOpacity>
   );
 

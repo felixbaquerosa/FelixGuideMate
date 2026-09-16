@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import FavoriteHeart from '../components/FavoriteHeart';
 import { EmptyState, RatingPill } from '../components/ui';
 import { usePreferences } from '../lib/preferences';
 import { useTheme } from '../lib/theme';
@@ -66,6 +67,7 @@ export default function ListingsScreen() {
             <Text style={styles.areaChipText}>{item.area}</Text>
           </View>
         ) : null}
+        <FavoriteHeart listingId={item.id} favorited={item.favorited} style={styles.heart} />
       </View>
       <View style={styles.cardBody}>
         <Text style={[styles.cardTitle, { color: colors.text }]} numberOfLines={1}>{item.title}</Text>
@@ -137,6 +139,7 @@ const styles = StyleSheet.create({
   imageWrap: { width: '100%', height: 180 },
   cardImage: { width: '100%', height: '100%', resizeMode: 'cover', backgroundColor: '#00000011' },
   ratingPos: { position: 'absolute', top: 10, right: 10 },
+  heart: { position: 'absolute', top: 10, left: 10 },
   areaChip: {
     position: 'absolute',
     bottom: 10,

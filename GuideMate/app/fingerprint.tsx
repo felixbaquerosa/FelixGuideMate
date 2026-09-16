@@ -5,7 +5,6 @@ import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
-    SafeAreaView,
     StatusBar,
     StyleSheet,
     Text,
@@ -13,9 +12,9 @@ import {
     useColorScheme,
     View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getSavedCredentials, isBiometricEnabled, setBiometricEnabled } from '../lib/biometric';
-import { getSession } from '../lib/authStore';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { isBiometricEnabled, setBiometricEnabled } from '../lib/biometric';
+import { enableFingerprint, getSession } from '../lib/authStore';
 
 export default function FingerprintScreen() {
   const router = useRouter();
@@ -86,17 +85,18 @@ export default function FingerprintScreen() {
       });
 
       if (result.success) {
-        // Only enable when this account's credentials are saved on the device,
-        // so the fingerprint signs back in as THIS user (works for every user).
-        const creds = await getSavedCredentials();
-        if (!creds) {
+        // Bind the fingerprint to whoever is signed in right now. Password
+        // accounts replay their saved login; Google/Facebook accounts save the
+        // current session token — so no password is ever required here.
+        try {
+          await enableFingerprint();
+        } catch (e) {
           Alert.alert(
-            'Log in with your password first',
-            'For security, please sign out and log in once with your email and password, then enable fingerprint. This links the fingerprint to your account.'
+            'Log in first',
+            e instanceof Error ? e.message : 'Please log in first, then enable fingerprint.'
           );
           return;
         }
-        await setBiometricEnabled(true);
         setEnabled(true);
         Alert.alert('Success', 'Fingerprint login is now enabled for your account. Next time you can sign in with your fingerprint only.');
       } else if (result.error && result.error !== 'user_cancel' && result.error !== 'system_cancel') {

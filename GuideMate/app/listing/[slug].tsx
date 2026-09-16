@@ -21,6 +21,7 @@ import { usePreferences } from '../../lib/preferences';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../lib/theme';
 import CalendarPicker from '../../components/CalendarPicker';
+import FavoriteHeart from '../../components/FavoriteHeart';
 import { findVoucher, getVoucherDiscount } from '../../lib/vouchers';
 
 const QR_EWALLET = require('../../assets/images/payment/qr-ewallet.png');
@@ -52,6 +53,8 @@ export default function ListingDetailScreen() {
 
   const [listing, setListing] = useState<ApiListing | null>(null);
   const [alreadyBooked, setAlreadyBooked] = useState(false);
+  const [favorited, setFavorited] = useState(false);
+  const [canReview, setCanReview] = useState(false);
   const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -91,7 +94,9 @@ export default function ListingDetailScreen() {
     try {
       const data = await getListing(String(slug));
       setListing(data.listing);
+      setFavorited(!!data.favorited);
       setAlreadyBooked(!!data.already_booked);
+      setCanReview(!!data.can_review);
       setBookedSlots(Array.isArray(data.booked_slots) ? data.booked_slots : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load this listing.');
@@ -384,6 +389,7 @@ export default function ListingDetailScreen() {
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()} activeOpacity={0.8}>
             <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
           </TouchableOpacity>
+          <FavoriteHeart listingId={listing.id} favorited={favorited} size={40} style={styles.favButton} />
           <View style={styles.heroTextWrap}>
             {listing.area ? (
               <View style={styles.areaChip}>
@@ -440,6 +446,17 @@ export default function ListingDetailScreen() {
               <Text style={[styles.sectionTitle, { color: theme.textMain }]}>{"What's included"}</Text>
               <Text style={[styles.about, { color: theme.textSub }]}>{listing.included}</Text>
             </>
+          ) : null}
+
+          {canReview ? (
+            <TouchableOpacity
+              style={[styles.messageGuideBtn, { borderColor: '#F6B100' }]}
+              activeOpacity={0.85}
+              onPress={() => router.push({ pathname: '/review/[id]', params: { id: String(listing.id), title: listing.title } })}
+            >
+              <Ionicons name="star" size={17} color="#F6B100" style={{ marginRight: 8 }} />
+              <Text style={[styles.messageGuideText, { color: '#F6B100' }]}>Write a review</Text>
+            </TouchableOpacity>
           ) : null}
         </View>
       </ScrollView>
@@ -771,6 +788,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  favButton: { position: 'absolute', top: 44, right: 16 },
   heroTextWrap: { position: 'absolute', bottom: 18, left: 18, right: 18 },
   areaChip: {
     flexDirection: 'row',

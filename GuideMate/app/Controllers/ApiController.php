@@ -8,12 +8,19 @@ use App\Core\ApiAuth;
 use App\Core\Auth;
 use App\Core\Controller;
 use App\Core\Database;
+use App\Core\Translator;
+use App\Core\Upload;
+use RuntimeException;
 use App\Models\Booking;
 use App\Models\Category;
+use App\Models\ConversationSetting;
+use App\Models\Dispute;
+use App\Models\DisputeFile;
 use App\Models\Favorite;
 use App\Models\Feedback;
 use App\Models\Listing;
 use App\Core\App;
+use App\Models\Message;
 use App\Models\PasswordReset;
 use App\Models\Payment;
 use App\Models\RentalRequest;
@@ -25,6 +32,15 @@ use App\Services\RecommendationService;
 
 final class ApiController extends Controller
 {
+    /**
+     * Cache of the current user's favorited listing ids, loaded once per
+     * request so every listing in a list response can report `favorited`
+     * without an extra query per row. Null until first resolved.
+     *
+     * @var array<int, int>|null
+     */
+    private ?array $favoriteIds = null;
+
     public function __construct()
     {
         $this->sendCors();
@@ -96,9 +112,19 @@ final class ApiController extends Controller
         $gallery = Listing::gallery($listingId);
         $userId = ApiAuth::id();
         $favorited = $userId !== null && Favorite::exists($userId, $listingId);
+        $alreadyBooked = $userId !== null && Booking::hasActivePaidBooking($listingId, $userId);
+        $hasReviewed = $userId !== null && Review::userHasReviewed($listingId, $userId);
+        // Reviews open once the tourist has a completed (or confirmed) booking.
+        $canReview = $userId !== null && !$hasReviewed && Booking::hasCompletedBooking($listingId, $userId);
 
         $this->json([
             'listing' => $this->listingPayload($listing, true),
+            'already_booked' => $alreadyBooked,
+            'has_reviewed' => $hasReviewed,
+            'can_review' => $canReview,
+            // Guide-level: disable every slot where this guide is already busy
+            // (on this or any of their other listings) to avoid double-booking.
+            'booked_slots' => Booking::guideBookedSlots((int) ($listing['user_id'] ?? 0)),
             'gallery' => array_map(
                 static fn (array $img): array => [
                     'id' => (int) $img['id'],
@@ -192,6 +218,533 @@ final class ApiController extends Controller
             'token' => $token,
             'user' => $this->userPayload($user),
         ], 201);
+    }
+
+    /**
+     * POST /api/auth/social — sign in with Google or Facebook.
+     *
+     * Privacy by design: we store ONLY the provider + its opaque user id. The
+     * real Google/Facebook email and password are never received or stored, so
+     * an admin can never see them; the account appears anonymously.
+     *
+     * DEMO mode (config social.demo=true) trusts a client-supplied "subject" so
+     * the buttons work without real OAuth apps. In LIVE mode we verify a real
+     * Google id_token / Facebook access_token server-side before trusting it.
+     */
+    public function socialAuth(): void
+    {
+        $body = $this->jsonBody();
+        $provider = strtolower(trim((string) ($body['provider'] ?? '')));
+        if (!in_array($provider, ['google', 'facebook'], true)) {
+            $this->json(['error' => 'Unsupported sign-in provider.'], 422);
+            return;
+        }
+
+        $social = App::config('social') ?? [];
+        $demo = (bool) ($social['demo'] ?? true);
+        $token = trim((string) ($body['token'] ?? ''));
+
+        if ($token !== '') {
+            // A real provider token was supplied — always verify it server-side.
+            $subject = $provider === 'google'
+                ? $this->verifyGoogleToken($token, (array) ($social['google_client_ids'] ?? []))
+                : $this->verifyFacebookToken($token);
+            if ($subject === null) {
+                $this->json(['error' => 'Could not verify your ' . ucfirst($provider) . ' sign-in. Please try again.'], 401);
+                return;
+            }
+        } elseif ($demo) {
+            // No token: fall back to the anonymous demo identity.
+            $subject = trim((string) ($body['subject'] ?? ''));
+            if ($subject === '') {
+                $this->json(['error' => 'Missing demo subject.'], 422);
+                return;
+            }
+            // Namespace demo ids so they can never collide with real ones.
+            $subject = 'demo_' . $subject;
+        } else {
+            $this->json(['error' => 'Missing provider token.'], 422);
+            return;
+        }
+
+        $existing = User::findByOAuth($provider, $subject);
+        if ($existing !== null) {
+            if ((int) ($existing['is_active'] ?? 1) === 0) {
+                $this->json(['error' => 'This account has been suspended.'], 403);
+                return;
+            }
+            $userId = (int) $existing['id'];
+        } else {
+            $userId = User::createOAuthUser($provider, $subject);
+        }
+
+        $user = User::find($userId);
+        if ($user === null) {
+            $this->json(['error' => 'Sign-in failed.'], 500);
+            return;
+        }
+
+        $token = ApiAuth::issue($userId);
+        $this->json([
+            'token' => $token,
+            'user' => $this->userPayload($user),
+        ]);
+    }
+
+    /**
+     * Verify a Google ID token via Google's tokeninfo endpoint. Returns the
+     * stable subject id ("sub") only when the token is valid and (if client ids
+     * are configured) was issued for one of our apps.
+     */
+    private function verifyGoogleToken(string $idToken, array $clientIds): ?string
+    {
+        $resp = $this->httpGetJson('https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($idToken));
+        if ($resp === null || empty($resp['sub'])) {
+            return null;
+        }
+        if (!in_array((string) ($resp['iss'] ?? ''), ['accounts.google.com', 'https://accounts.google.com'], true)) {
+            return null;
+        }
+        if ($clientIds !== [] && !in_array((string) ($resp['aud'] ?? ''), $clientIds, true)) {
+            return null;
+        }
+        return (string) $resp['sub'];
+    }
+
+    /**
+     * Verify a Facebook access token via the Graph API and return the
+     * app-scoped user id. We intentionally request only the id (never email).
+     */
+    private function verifyFacebookToken(string $accessToken): ?string
+    {
+        $resp = $this->httpGetJson('https://graph.facebook.com/me?fields=id&access_token=' . urlencode($accessToken));
+        if ($resp === null || empty($resp['id'])) {
+            return null;
+        }
+        return (string) $resp['id'];
+    }
+
+    /**
+     * Minimal HTTPS GET returning decoded JSON, or null on any failure.
+     *
+     * @return array<string, mixed>|null
+     */
+    /**
+     * @param array<int, string> $headers
+     * @return array<string, mixed>|null
+     */
+    private function httpGetJson(string $url, array $headers = []): ?array
+    {
+        $body = null;
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            $opts = [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 10,
+                CURLOPT_SSL_VERIFYPEER => true,
+            ];
+            if (!empty($headers)) {
+                $opts[CURLOPT_HTTPHEADER] = $headers;
+            }
+            curl_setopt_array($ch, $opts);
+            $out = curl_exec($ch);
+            $ok = $out !== false && (int) curl_getinfo($ch, CURLINFO_HTTP_CODE) < 400;
+            curl_close($ch);
+            $body = $ok ? (string) $out : null;
+        } else {
+            $httpOpts = ['timeout' => 10, 'ignore_errors' => true];
+            if (!empty($headers)) {
+                $httpOpts['header'] = implode("\r\n", $headers);
+            }
+            $ctx = stream_context_create(['http' => $httpOpts]);
+            $out = @file_get_contents($url, false, $ctx);
+            $body = $out === false ? null : (string) $out;
+        }
+        if ($body === null) {
+            return null;
+        }
+        $data = json_decode($body, true);
+        return is_array($data) ? $data : null;
+    }
+
+    /**
+     * GET /api/auth/google/start — begin the Expo Go-compatible Google login.
+     *
+     * The mobile app opens this URL in a web browser; we redirect to Google.
+     * Google only ever redirects back to OUR https callback (never the phone),
+     * which is why this works in Expo Go without a dev build.
+     */
+    public function googleStart(): void
+    {
+        $social = App::config('social') ?? [];
+        $clientId = (string) (($social['google_web_client_id'] ?? '') ?: ($social['google_client_ids'][0] ?? ''));
+        $secret = (string) ($social['google_client_secret'] ?? '');
+        $redirect = (string) ($social['google_redirect'] ?? '');
+        $return = trim((string) ($_GET['return'] ?? ''));
+
+        if ($clientId === '' || $secret === '' || $redirect === '') {
+            $this->socialErrorPage('Google sign-in is not configured on the server yet.');
+            return;
+        }
+        if ($return === '' || !preg_match('#^(exp|guidemate|https?)://#i', $return)) {
+            $this->socialErrorPage('Invalid return target.');
+            return;
+        }
+
+        $payload = $this->b64urlEncode((string) json_encode([
+            'r' => $return,
+            't' => time(),
+            'n' => bin2hex(random_bytes(8)),
+        ]));
+        $sig = $this->b64urlEncode(hash_hmac('sha256', $payload, $secret, true));
+        $state = $payload . '.' . $sig;
+
+        $params = http_build_query([
+            'client_id' => $clientId,
+            'redirect_uri' => $redirect,
+            'response_type' => 'code',
+            // 'profile' returns the real display name (and 'email' the address)
+            // in the id_token so we can show "Mole Kraine" instead of "Google User".
+            'scope' => 'openid profile email',
+            'state' => $state,
+            'prompt' => 'select_account',
+            'access_type' => 'online',
+        ]);
+        header('Location: https://accounts.google.com/o/oauth2/v2/auth?' . $params, true, 302);
+    }
+
+    /**
+     * GET /api/auth/google/callback — Google redirects here with an auth code.
+     * We exchange it, verify the id token, load/create the anonymous account,
+     * mint our app token, and hand it back to the app via its return link.
+     */
+    public function googleCallback(): void
+    {
+        $social = App::config('social') ?? [];
+        $clientId = (string) (($social['google_web_client_id'] ?? '') ?: ($social['google_client_ids'][0] ?? ''));
+        $secret = (string) ($social['google_client_secret'] ?? '');
+        $redirect = (string) ($social['google_redirect'] ?? '');
+
+        $return = $this->verifyState((string) ($_GET['state'] ?? ''), $secret);
+        if ($return === null) {
+            $this->socialErrorPage('Your sign-in link expired. Please try again.');
+            return;
+        }
+        if (isset($_GET['error'])) {
+            $this->redirectToApp($return, ['error' => 'Google sign-in was cancelled.']);
+            return;
+        }
+
+        $code = (string) ($_GET['code'] ?? '');
+        if ($code === '' || $clientId === '' || $secret === '' || $redirect === '') {
+            $this->redirectToApp($return, ['error' => 'Google sign-in failed. Please try again.']);
+            return;
+        }
+
+        $tokenResp = $this->httpPostForm('https://oauth2.googleapis.com/token', [
+            'code' => $code,
+            'client_id' => $clientId,
+            'client_secret' => $secret,
+            'redirect_uri' => $redirect,
+            'grant_type' => 'authorization_code',
+        ]);
+        $claims = $this->decodeJwtClaims(is_array($tokenResp) ? (string) ($tokenResp['id_token'] ?? '') : '');
+        $sub = (string) ($claims['sub'] ?? '');
+        $iss = (string) ($claims['iss'] ?? '');
+        $aud = (string) ($claims['aud'] ?? '');
+        if ($sub === '' || !in_array($iss, ['accounts.google.com', 'https://accounts.google.com'], true) || $aud !== $clientId) {
+            $this->redirectToApp($return, ['error' => 'Could not verify your Google sign-in.']);
+            return;
+        }
+
+        // Prefer the id_token claims for the name; if they're missing (Google
+        // doesn't always inline them), fall back to the userinfo endpoint using
+        // the access token — that reliably returns name/given_name/family_name.
+        $nameClaim = (string) ($claims['name'] ?? '');
+        $givenClaim = (string) ($claims['given_name'] ?? '');
+        $familyClaim = (string) ($claims['family_name'] ?? '');
+        $emailClaim = (string) ($claims['email'] ?? '');
+        if ($nameClaim === '' && $givenClaim === '' && $familyClaim === '') {
+            $accessToken = is_array($tokenResp) ? (string) ($tokenResp['access_token'] ?? '') : '';
+            if ($accessToken !== '') {
+                $info = $this->httpGetJson('https://www.googleapis.com/oauth2/v3/userinfo', [
+                    'Authorization: Bearer ' . $accessToken,
+                ]);
+                if (is_array($info)) {
+                    $nameClaim = (string) ($info['name'] ?? $nameClaim);
+                    $givenClaim = (string) ($info['given_name'] ?? $givenClaim);
+                    $familyClaim = (string) ($info['family_name'] ?? $familyClaim);
+                    $emailClaim = (string) ($info['email'] ?? $emailClaim);
+                }
+            }
+        }
+        $name = $this->displayNameFromClaims($nameClaim, $givenClaim, $familyClaim, $emailClaim);
+
+        $existing = User::findByOAuth('google', $sub);
+        if ($existing !== null) {
+            if ((int) ($existing['is_active'] ?? 1) === 0) {
+                $this->redirectToApp($return, ['error' => 'This account has been suspended.']);
+                return;
+            }
+            $userId = (int) $existing['id'];
+            User::renameIfPlaceholder($userId, (string) ($existing['name'] ?? ''), $name);
+        } else {
+            $userId = User::createOAuthUser('google', $sub, $name);
+        }
+
+        $appToken = ApiAuth::issue($userId);
+        $this->redirectToApp($return, ['token' => $appToken]);
+    }
+
+    /**
+     * GET /api/auth/facebook/start — begin the Expo Go-compatible Facebook
+     * login. Same design as Google: Facebook only ever redirects to our public
+     * https callback, never the phone.
+     */
+    public function facebookStart(): void
+    {
+        $social = App::config('social') ?? [];
+        $appId = (string) ($social['facebook_app_id'] ?? '');
+        $secret = (string) ($social['facebook_app_secret'] ?? '');
+        $redirect = (string) ($social['facebook_redirect'] ?? '');
+        $return = trim((string) ($_GET['return'] ?? ''));
+
+        if ($appId === '' || $secret === '' || $redirect === '') {
+            $this->socialErrorPage('Facebook sign-in is not configured on the server yet.');
+            return;
+        }
+        if ($return === '' || !preg_match('#^(exp|guidemate|https?)://#i', $return)) {
+            $this->socialErrorPage('Invalid return target.');
+            return;
+        }
+
+        $payload = $this->b64urlEncode((string) json_encode([
+            'r' => $return,
+            't' => time(),
+            'n' => bin2hex(random_bytes(8)),
+        ]));
+        $sig = $this->b64urlEncode(hash_hmac('sha256', $payload, $secret, true));
+        $state = $payload . '.' . $sig;
+
+        $params = http_build_query([
+            'client_id' => $appId,
+            'redirect_uri' => $redirect,
+            'response_type' => 'code',
+            'scope' => 'public_profile',
+            'state' => $state,
+        ]);
+        header('Location: https://www.facebook.com/v18.0/dialog/oauth?' . $params, true, 302);
+    }
+
+    /**
+     * GET /api/auth/facebook/callback — exchange the code, read the app-scoped
+     * user id (never the email), load/create the anonymous account, and hand
+     * our app token back to the app.
+     */
+    public function facebookCallback(): void
+    {
+        $social = App::config('social') ?? [];
+        $appId = (string) ($social['facebook_app_id'] ?? '');
+        $secret = (string) ($social['facebook_app_secret'] ?? '');
+        $redirect = (string) ($social['facebook_redirect'] ?? '');
+
+        $return = $this->verifyState((string) ($_GET['state'] ?? ''), $secret);
+        if ($return === null) {
+            $this->socialErrorPage('Your sign-in link expired. Please try again.');
+            return;
+        }
+        if (isset($_GET['error'])) {
+            $this->redirectToApp($return, ['error' => 'Facebook sign-in was cancelled.']);
+            return;
+        }
+
+        $code = (string) ($_GET['code'] ?? '');
+        if ($code === '' || $appId === '' || $secret === '' || $redirect === '') {
+            $this->redirectToApp($return, ['error' => 'Facebook sign-in failed. Please try again.']);
+            return;
+        }
+
+        $tokenResp = $this->httpGetJson('https://graph.facebook.com/v18.0/oauth/access_token?' . http_build_query([
+            'client_id' => $appId,
+            'redirect_uri' => $redirect,
+            'client_secret' => $secret,
+            'code' => $code,
+        ]));
+        $accessToken = is_array($tokenResp) ? (string) ($tokenResp['access_token'] ?? '') : '';
+        if ($accessToken === '') {
+            $this->redirectToApp($return, ['error' => 'Could not verify your Facebook sign-in.']);
+            return;
+        }
+
+        $me = $this->httpGetJson('https://graph.facebook.com/me?' . http_build_query([
+            'fields' => 'id,name',
+            'access_token' => $accessToken,
+        ]));
+        $fid = is_array($me) ? (string) ($me['id'] ?? '') : '';
+        if ($fid === '') {
+            $this->redirectToApp($return, ['error' => 'Could not verify your Facebook sign-in.']);
+            return;
+        }
+
+        $existing = User::findByOAuth('facebook', $fid);
+        if ($existing !== null) {
+            if ((int) ($existing['is_active'] ?? 1) === 0) {
+                $this->redirectToApp($return, ['error' => 'This account has been suspended.']);
+                return;
+            }
+            $userId = (int) $existing['id'];
+            $name = $this->displayNameFromClaims(
+                is_array($me) ? (string) ($me['name'] ?? '') : '',
+                '',
+                '',
+                ''
+            );
+            User::renameIfPlaceholder($userId, (string) ($existing['name'] ?? ''), $name);
+        } else {
+            $name = $this->displayNameFromClaims(
+                is_array($me) ? (string) ($me['name'] ?? '') : '',
+                '',
+                '',
+                ''
+            );
+            $userId = User::createOAuthUser('facebook', $fid, $name);
+        }
+
+        $appToken = ApiAuth::issue($userId);
+        $this->redirectToApp($return, ['token' => $appToken]);
+    }
+
+    /** Validate a signed state token and return the app's return URL. */
+    private function verifyState(string $state, string $secret): ?string
+    {
+        if ($secret === '' || !str_contains($state, '.')) {
+            return null;
+        }
+        [$payload, $sig] = explode('.', $state, 2);
+        $expected = $this->b64urlEncode(hash_hmac('sha256', $payload, $secret, true));
+        if (!hash_equals($expected, $sig)) {
+            return null;
+        }
+        $data = json_decode($this->b64urlDecode($payload), true);
+        if (!is_array($data) || empty($data['r'])) {
+            return null;
+        }
+        if ((int) ($data['t'] ?? 0) < time() - 600) {
+            return null; // expired after 10 minutes
+        }
+        return (string) $data['r'];
+    }
+
+    /** Bounce back into the app (its exp:// / guidemate:// return link). */
+    private function redirectToApp(string $return, array $params): void
+    {
+        $sep = str_contains($return, '?') ? '&' : '?';
+        $url = $return . $sep . http_build_query($params);
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>'
+            . '<body style="font-family:sans-serif;text-align:center;padding:40px;color:#111;">'
+            . '<p>Signing you in…</p>'
+            . '<p><a href="' . htmlspecialchars($url, ENT_QUOTES) . '">Tap here if you are not redirected</a></p>'
+            . '<script>window.location.href=' . json_encode($url) . ';</script>'
+            . '</body></html>';
+    }
+
+    private function socialErrorPage(string $message): void
+    {
+        http_response_code(400);
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<!doctype html><body style="font-family:sans-serif;padding:40px;color:#111;">'
+            . htmlspecialchars($message) . '</body>';
+    }
+
+    private function b64urlEncode(string $data): string
+    {
+        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+    }
+
+    private function b64urlDecode(string $data): string
+    {
+        return (string) base64_decode(strtr($data, '-_', '+/'));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeJwtClaims(string $jwt): array
+    {
+        $parts = explode('.', $jwt);
+        if (count($parts) < 2) {
+            return [];
+        }
+        $claims = json_decode($this->b64urlDecode($parts[1]), true);
+        return is_array($claims) ? $claims : [];
+    }
+
+    /**
+     * Build a friendly display name for a social account. Prefers the provider's
+     * full name, then given+family, then a title-cased version of the email's
+     * local part (e.g. "mole.kraine" / "mole_kraine" → "Mole Kraine"). Returns
+     * '' when nothing usable is available (caller falls back to a label).
+     */
+    private function displayNameFromClaims(string $name, string $given, string $family, string $email): string
+    {
+        $name = trim($name);
+        if ($name !== '') {
+            return $name;
+        }
+        $combined = trim(trim($given) . ' ' . trim($family));
+        if ($combined !== '') {
+            return $combined;
+        }
+        $local = strtolower(trim((string) strstr($email . '@', '@', true)));
+        if ($local === '') {
+            return '';
+        }
+        // Split on dots/underscores/hyphens/plus/digits and title-case each word.
+        $words = preg_split('/[._\-+0-9]+/', $local) ?: [];
+        $words = array_filter(array_map('trim', $words), static fn ($w) => $w !== '');
+        if (empty($words)) {
+            return '';
+        }
+        return implode(' ', array_map(static fn ($w) => ucfirst($w), $words));
+    }
+
+    /**
+     * @param array<string, string> $fields
+     * @return array<string, mixed>|null
+     */
+    private function httpPostForm(string $url, array $fields): ?array
+    {
+        $body = http_build_query($fields);
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $body,
+                CURLOPT_TIMEOUT => 15,
+                CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
+            ]);
+            $out = curl_exec($ch);
+            $ok = $out !== false && (int) curl_getinfo($ch, CURLINFO_HTTP_CODE) < 500;
+            curl_close($ch);
+            $out = $ok ? (string) $out : null;
+        } else {
+            $ctx = stream_context_create(['http' => [
+                'method' => 'POST',
+                'header' => 'Content-Type: application/x-www-form-urlencoded',
+                'content' => $body,
+                'timeout' => 15,
+                'ignore_errors' => true,
+            ]]);
+            $res = @file_get_contents($url, false, $ctx);
+            $out = $res === false ? null : (string) $res;
+        }
+        if ($out === null) {
+            return null;
+        }
+        $data = json_decode($out, true);
+        return is_array($data) ? $data : null;
     }
 
     public function forgotPassword(): void
@@ -303,6 +856,72 @@ final class ApiController extends Controller
         $this->json(['success' => true]);
     }
 
+    /**
+     * Update the signed-in user's editable profile fields (name, bio).
+     * Only the fields present in the request are changed; the rest are kept.
+     */
+    public function updateProfile(): void
+    {
+        $user = ApiAuth::user();
+        if ($user === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $body = $this->jsonBody();
+
+        $name = array_key_exists('name', $body) ? trim((string) $body['name']) : (string) ($user['name'] ?? '');
+        $bio = array_key_exists('bio', $body) ? trim((string) $body['bio']) : (string) ($user['bio'] ?? '');
+
+        if ($name === '') {
+            $this->json(['error' => 'Name cannot be empty.'], 422);
+            return;
+        }
+        if (mb_strlen($bio) > 300) {
+            $bio = mb_substr($bio, 0, 300);
+        }
+
+        User::updateProfile((int) $user['id'], [
+            'name' => $name,
+            'phone' => (string) ($user['phone'] ?? ''),
+            'location' => (string) ($user['location'] ?? ''),
+            'bio' => $bio,
+        ]);
+
+        $updated = User::find((int) $user['id']) ?? $user;
+        $this->json(['user' => $this->userPayload($updated)]);
+    }
+
+    /**
+     * Store a new profile photo uploaded as multipart/form-data (field "avatar").
+     */
+    public function uploadAvatar(): void
+    {
+        $user = ApiAuth::user();
+        if ($user === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $file = $_FILES['avatar'] ?? null;
+        if (!Upload::present($file)) {
+            $this->json(['error' => 'No image was received. Please pick a photo and try again.'], 422);
+            return;
+        }
+
+        try {
+            $path = Upload::store($file, 'avatars/' . (int) $user['id'], ['jpg', 'jpeg', 'png', 'webp']);
+        } catch (RuntimeException $e) {
+            $this->json(['error' => $e->getMessage()], 422);
+            return;
+        }
+
+        User::updateAvatar((int) $user['id'], $path);
+
+        $updated = User::find((int) $user['id']) ?? $user;
+        $this->json(['user' => $this->userPayload($updated)]);
+    }
+
     public function bookings(): void
     {
         $userId = ApiAuth::id();
@@ -314,7 +933,7 @@ final class ApiController extends Controller
         Booking::reconcileOrphanRefunds();
         $bookings = Booking::forCustomer($userId);
         $this->json([
-            'bookings' => array_map([$this, 'bookingPayload'], $bookings),
+            'bookings' => array_map(fn (array $b): array => $this->bookingPayload($b, $userId), $bookings),
         ]);
     }
 
@@ -374,6 +993,7 @@ final class ApiController extends Controller
         $body = $this->jsonBody();
         $listingId = (int) ($body['listing_id'] ?? 0);
         $date = trim((string) ($body['booking_date'] ?? ''));
+        $time = substr(trim((string) ($body['booking_time'] ?? '')), 0, 5);
         $guests = max(1, (int) ($body['guests'] ?? 1));
         $notes = trim((string) ($body['notes'] ?? ''));
 
@@ -395,8 +1015,21 @@ final class ApiController extends Controller
             $this->json(['error' => 'Booking date is required.'], 422);
             return;
         }
-        if (Booking::isDateBooked($listingId, $date)) {
-            $this->json(['error' => 'That date is already booked.'], 422);
+        // A tourist can't hold two active bookings for the same experience.
+        if (Booking::hasActivePaidBooking($listingId, $userId)) {
+            $this->json(['error' => 'You already have a booking for this experience.'], 409);
+            return;
+        }
+        // Guide-level conflict: a guide can only run one tour at a time, so if
+        // ANY tourist already booked this guide (on any of their listings) for
+        // this date + time, no one else can take that same slot.
+        $guideId = (int) ($listing['user_id'] ?? 0);
+        if ($time !== '' && Booking::isGuideSlotBooked($guideId, $date, $time)) {
+            $this->json(['error' => 'This guide is already booked for that date and time. Please pick another slot.'], 409);
+            return;
+        }
+        if ($time === '' && Booking::isGuideDateBooked($guideId, $date)) {
+            $this->json(['error' => 'This guide is already booked on that date. Please pick another day.'], 409);
             return;
         }
 
@@ -418,7 +1051,7 @@ final class ApiController extends Controller
         }
         $fullNotes = trim($notes === '' ? $paymentNote : ($notes . "\n" . $paymentNote));
 
-        $bookingId = Booking::create($listingId, $userId, $date, $guests, $total, $fullNotes);
+        $bookingId = Booking::create($listingId, $userId, $date, $guests, $total, $fullNotes, $time !== '' ? $time : null);
         Payment::create($bookingId, $total, $method, 'paid');
         Booking::updateStatus($bookingId, 'confirmed');
 
@@ -429,6 +1062,227 @@ final class ApiController extends Controller
         $this->json([
             'booking' => $booking !== null ? $this->bookingPayload($booking) : null,
         ], 201);
+    }
+
+    // ── Chat / messaging ────────────────────────────────────────────────────
+
+    /** GET /api/messages — conversation list (inbox or archived). */
+    public function conversations(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $archived = (string) $this->input('archived', '') !== '';
+        $rows = $archived
+            ? Message::archivedConversations($userId)
+            : Message::conversations($userId);
+
+        $conversations = array_map(static function (array $c): array {
+            return [
+                'partner_id' => (int) $c['partner_id'],
+                'partner_name' => (string) ($c['partner_name'] ?? ''),
+                'partner_avatar' => api_img_src((string) ($c['partner_avatar'] ?? ''), 'user' . $c['partner_id']),
+                'last_body' => (string) ($c['last_body'] ?? ''),
+                'last_at' => (string) ($c['last_at'] ?? ''),
+                'unread' => (int) ($c['unread'] ?? 0),
+                'is_pinned' => (bool) ($c['is_pinned'] ?? false),
+            ];
+        }, $rows);
+
+        $this->json([
+            'conversations' => $conversations,
+            'unread_total' => Message::unreadCount($userId),
+        ]);
+    }
+
+    /** GET /api/messages/thread?partner=&lang= — full conversation. */
+    public function thread(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $partnerId = (int) $this->input('partner', 0);
+        $partner = $partnerId > 0 ? User::find($partnerId) : null;
+        if ($partner === null || $partnerId === $userId) {
+            $this->json(['error' => 'Conversation not found.'], 404);
+            return;
+        }
+
+        $lang = $this->langParam();
+        Message::markRead($userId, $partnerId);
+
+        $rows = Message::thread($userId, $partnerId);
+        // Only translate the most recent messages to keep the first load fast;
+        // cached translations make later loads instant.
+        $translateFrom = max(0, count($rows) - 60);
+        $messages = [];
+        foreach ($rows as $i => $m) {
+            $messages[] = $this->messagePayload($m, $userId, $i >= $translateFrom ? $lang : null);
+        }
+
+        $settings = ConversationSetting::forPair($userId, $partnerId);
+        $this->json([
+            'partner' => $this->chatPartnerPayload($partner),
+            'messages' => $messages,
+            'archived' => (bool) ($settings['is_archived'] ?? false),
+        ]);
+    }
+
+    /** GET /api/messages/poll?partner=&since=&lang= — new messages + receipts. */
+    public function pollThread(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $partnerId = (int) $this->input('partner', 0);
+        $partner = $partnerId > 0 ? User::find($partnerId) : null;
+        if ($partner === null || $partnerId === $userId) {
+            $this->json(['error' => 'Conversation not found.'], 404);
+            return;
+        }
+
+        $lang = $this->langParam();
+        $since = (int) $this->input('since', 0);
+        $newRows = Message::since($userId, $partnerId, $since);
+        if ($newRows !== []) {
+            Message::markRead($userId, $partnerId);
+        }
+
+        $new = array_map(fn (array $m): array => $this->messagePayload($m, $userId, $lang), $newRows);
+        $statuses = array_map(
+            static fn (array $r): array => ['id' => (int) $r['id'], 'status' => 'read'],
+            Message::readReceipts($userId, $partnerId)
+        );
+
+        $this->json([
+            'new' => $new,
+            'statuses' => $statuses,
+            'partner_online' => User::isOnline($partnerId),
+        ]);
+    }
+
+    /** POST /api/messages/send — body { partner_id, body, listing_id? }. */
+    public function sendMessage(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $body = $this->jsonBody();
+        $partnerId = (int) ($body['partner_id'] ?? 0);
+        $text = trim((string) ($body['body'] ?? ''));
+        $listingId = isset($body['listing_id']) ? (int) $body['listing_id'] : 0;
+
+        if ($partnerId <= 0 || $partnerId === $userId || $text === '') {
+            $this->json(['error' => 'A recipient and message are required.'], 422);
+            return;
+        }
+        if (User::find($partnerId) === null) {
+            $this->json(['error' => 'Recipient not found.'], 404);
+            return;
+        }
+
+        // Replying to an archived chat brings it back to the inbox.
+        $settings = ConversationSetting::forPair($userId, $partnerId);
+        if ($settings !== null && (bool) ($settings['is_archived'] ?? false)) {
+            ConversationSetting::setArchived($userId, $partnerId, false);
+        }
+
+        $id = Message::send($userId, $partnerId, $text, $listingId > 0 ? $listingId : null);
+
+        $this->json([
+            'message' => [
+                'id' => $id,
+                'body' => $text,
+                'mine' => true,
+                'created_at' => date('Y-m-d H:i:s'),
+                'status' => 'sent',
+            ],
+        ], 201);
+    }
+
+    /** POST /api/messages/archive — body { partner_id }. */
+    public function archiveConversation(): void
+    {
+        $this->setArchivedState(true);
+    }
+
+    /** POST /api/messages/unarchive — body { partner_id }. */
+    public function unarchiveConversation(): void
+    {
+        $this->setArchivedState(false);
+    }
+
+    /** POST /api/messages/delete — body { partner_id }. */
+    public function deleteConversation(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+        $partnerId = (int) ($this->jsonBody()['partner_id'] ?? 0);
+        if ($partnerId <= 0) {
+            $this->json(['error' => 'partner_id is required.'], 422);
+            return;
+        }
+        Message::deleteBetween($userId, $partnerId);
+        ConversationSetting::remove($userId, $partnerId);
+        $this->json(['success' => true]);
+    }
+
+    /** GET /api/guides — approved tour guides available to message. */
+    public function guides(): void
+    {
+        $userId = ApiAuth::id();
+        $guides = [];
+        foreach (User::guides('approved') as $u) {
+            if ($userId !== null && (int) $u['id'] === $userId) {
+                continue;
+            }
+            $payload = $this->chatPartnerPayload($u);
+            $stats = Booking::guideRatingStats((int) $u['id']);
+            $payload['rating'] = (float) ($stats['avg_rating'] ?? 0);
+            $payload['review_count'] = (int) ($stats['review_count'] ?? 0);
+            $payload['completed_tours'] = (int) ($stats['completed'] ?? 0);
+            // Guide is "on a tour" while they have a confirmed booking today;
+            // once it's completed (or the day passes) they're available again.
+            $payload['available'] = !Booking::isGuideBusyToday((int) $u['id']);
+            $guides[] = $payload;
+        }
+        // Available guides first, then best-rated and most-experienced.
+        usort($guides, static function (array $a, array $b): int {
+            return [$b['available'], $b['rating'], $b['completed_tours']]
+                <=> [$a['available'], $a['rating'], $a['completed_tours']];
+        });
+        $this->json(['guides' => $guides]);
+    }
+
+    private function setArchivedState(bool $archived): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+        $partnerId = (int) ($this->jsonBody()['partner_id'] ?? 0);
+        if ($partnerId <= 0) {
+            $this->json(['error' => 'partner_id is required.'], 422);
+            return;
+        }
+        ConversationSetting::setArchived($userId, $partnerId, $archived);
+        $this->json(['success' => true]);
     }
 
     public function favorites(): void
@@ -484,6 +1338,11 @@ final class ApiController extends Controller
         ]);
     }
 
+    /**
+     * POST /api/rentals — reserve a vehicle with FULL up-front payment.
+     * Sent as multipart/form-data so the tourist can attach a valid ID that is
+     * held for the rental owner until the unit is returned.
+     */
     public function createRental(): void
     {
         $userId = ApiAuth::id();
@@ -498,10 +1357,9 @@ final class ApiController extends Controller
             return;
         }
 
-        $body = $this->jsonBody();
-        $vehicleId = trim((string) ($body['vehicle_id'] ?? ''));
-        $pickupDate = trim((string) ($body['pickup_date'] ?? ''));
-        $phone = trim((string) ($body['customer_phone'] ?? ''));
+        $vehicleId = trim((string) ($_POST['vehicle_id'] ?? ''));
+        $pickupDate = trim((string) ($_POST['pickup_date'] ?? ''));
+        $phone = trim((string) ($_POST['customer_phone'] ?? ''));
 
         if ($vehicleId === '' || $pickupDate === '') {
             $this->json(['error' => 'vehicle_id and pickup_date are required.'], 422);
@@ -520,22 +1378,168 @@ final class ApiController extends Controller
             return;
         }
 
+        // ── Verification: a valid ID is required and held for the owner ──
+        $idType = trim((string) ($_POST['id_type'] ?? ''));
+        $idNumber = trim((string) ($_POST['id_number'] ?? ''));
+        if ($idType === '') {
+            $this->json(['error' => 'Please choose which valid ID you are presenting.'], 422);
+            return;
+        }
+        $idFile = $_FILES['id_document'] ?? null;
+        if (!Upload::present(is_array($idFile) ? $idFile : null)) {
+            $this->json(['error' => 'A photo of your valid ID is required to reserve a unit.'], 422);
+            return;
+        }
+        try {
+            $idPath = Upload::store($idFile, 'rentals/ids/' . $userId);
+        } catch (\RuntimeException $e) {
+            $this->json(['error' => $e->getMessage()], 422);
+            return;
+        }
+
+        // ── Payment: the tourist pays the whole amount to reserve ──
+        $method = strtolower(trim((string) ($_POST['payment_method'] ?? '')));
+        if (!in_array($method, ['gcash', 'instapay', 'card'], true)) {
+            $this->json(['error' => 'Please choose a valid payment method.'], 422);
+            return;
+        }
+        $reference = trim((string) ($_POST['payment_reference'] ?? ''));
+        if ($method === 'card') {
+            $last4 = preg_replace('/\D/', '', (string) ($_POST['card_last4'] ?? ''));
+            if (strlen((string) $last4) !== 4) {
+                $this->json(['error' => 'Enter the last 4 digits of your card.'], 422);
+                return;
+            }
+            $reference = 'CARD-' . $last4;
+        } elseif (mb_strlen($reference) < 4) {
+            $this->json(['error' => 'Enter the payment reference number from your app.'], 422);
+            return;
+        }
+
         $id = RentalRequest::create($userId, [
             'vehicle_id' => $vehicleId,
-            'vehicle_name' => (string) ($body['vehicle_name'] ?? $vehicle['name']),
-            'vehicle_type' => (string) ($body['vehicle_type'] ?? $vehicle['type']),
-            'shop_name' => (string) ($body['shop_name'] ?? $vehicle['shop']),
-            'location' => (string) ($body['location'] ?? $vehicle['location']),
+            'vehicle_name' => (string) ($_POST['vehicle_name'] ?? $vehicle['name']),
+            'vehicle_type' => (string) ($_POST['vehicle_type'] ?? $vehicle['type']),
+            'shop_name' => (string) ($_POST['shop_name'] ?? $vehicle['shop']),
+            'location' => (string) ($_POST['location'] ?? $vehicle['location']),
             'pickup_date' => $pickupDate,
-            'rental_days' => (int) ($body['rental_days'] ?? 1),
-            'price_per_day' => (float) ($body['price_per_day'] ?? $vehicle['price_per_day']),
+            'rental_days' => (int) ($_POST['rental_days'] ?? 1),
+            'price_per_day' => (float) ($_POST['price_per_day'] ?? $vehicle['price_per_day']),
             'customer_name' => (string) $user['name'],
             'customer_email' => (string) $user['email'],
             'customer_phone' => $phone,
-            'notes' => trim((string) ($body['notes'] ?? '')),
+            'notes' => trim((string) ($_POST['notes'] ?? '')),
+            'payment_status' => 'paid',
+            'payment_method' => $method,
+            'payment_reference' => $reference,
+            'id_document' => $idPath,
+            'id_type' => $idType,
+            'id_number' => $idNumber,
         ]);
 
-        $this->json(['request' => ['id' => $id, 'status' => 'pending']], 201);
+        $rental = RentalRequest::find($id);
+        $this->json([
+            'request' => $rental !== null ? $this->rentalPayload($rental) : ['id' => $id, 'status' => 'approved'],
+        ], 201);
+    }
+
+    /**
+     * GET /api/rentals/mine — the signed-in tourist's reservations.
+     */
+    public function myRentals(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $rentals = array_map(
+            fn (array $r): array => $this->rentalPayload($r),
+            RentalRequest::forCustomer($userId)
+        );
+        $this->json(['rentals' => $rentals]);
+    }
+
+    /**
+     * POST /api/rentals/report — report a problem with a reserved unit so the
+     * rental owner can review and refund. JSON body.
+     */
+    public function reportRental(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $body = $this->jsonBody();
+        $rentalId = (int) ($body['rental_id'] ?? 0);
+        $type = trim((string) ($body['problem_type'] ?? ''));
+        $message = trim((string) ($body['description'] ?? ''));
+
+        $rental = $rentalId > 0 ? RentalRequest::find($rentalId) : null;
+        if ($rental === null || (int) $rental['user_id'] !== $userId) {
+            $this->json(['error' => 'Reservation not found.'], 404);
+            return;
+        }
+        if (($rental['payment_status'] ?? 'unpaid') !== 'paid') {
+            $this->json(['error' => 'You can only report a problem on a paid reservation.'], 403);
+            return;
+        }
+        if (($rental['report_status'] ?? 'none') !== 'none') {
+            $this->json(['error' => 'You already reported a problem for this reservation.'], 409);
+            return;
+        }
+        if (!isset(RentalRequest::REPORT_TYPES[$type])) {
+            $this->json(['error' => 'Please choose a valid problem type.'], 422);
+            return;
+        }
+        if (mb_strlen($message) < 20) {
+            $this->json(['error' => 'Please describe the problem in at least 20 characters.'], 422);
+            return;
+        }
+
+        RentalRequest::report($rentalId, $type, $message);
+        $fresh = RentalRequest::find($rentalId);
+        $this->json(['request' => $fresh !== null ? $this->rentalPayload($fresh) : null]);
+    }
+
+    /**
+     * Shape a rental row for the mobile app. The ID document is intentionally
+     * NOT exposed here — it is held only for the rental owner.
+     *
+     * @param array<string, mixed> $r
+     * @return array<string, mixed>
+     */
+    private function rentalPayload(array $r): array
+    {
+        $reportStatus = (string) ($r['report_status'] ?? 'none');
+        $paymentStatus = (string) ($r['payment_status'] ?? 'unpaid');
+        $status = (string) $r['status'];
+
+        return [
+            'id' => (int) $r['id'],
+            'vehicle_name' => (string) $r['vehicle_name'],
+            'vehicle_type' => (string) $r['vehicle_type'],
+            'shop_name' => (string) $r['shop_name'],
+            'location' => (string) ($r['location'] ?? ''),
+            'pickup_date' => (string) $r['pickup_date'],
+            'rental_days' => (int) $r['rental_days'],
+            'total_amount' => (float) $r['total_amount'],
+            'status' => $status,
+            'status_label' => RentalRequest::statusLabel($status),
+            'payment_status' => $paymentStatus,
+            'payment_method' => (string) ($r['payment_method'] ?? ''),
+            'notes' => (string) ($r['notes'] ?? ''),
+            'report_status' => $reportStatus,
+            'report_type' => (string) ($r['report_type'] ?? ''),
+            'report_label' => RentalRequest::reportTypeLabel($r['report_type'] ?? null),
+            'report_message' => (string) ($r['report_message'] ?? ''),
+            'owner_report_note' => (string) ($r['owner_report_note'] ?? ''),
+            'can_report' => $paymentStatus === 'paid' && $reportStatus === 'none' && $status !== 'refunded',
+            'created_at' => (string) ($r['created_at'] ?? ''),
+        ];
     }
 
     /**
@@ -657,6 +1661,21 @@ final class ApiController extends Controller
      * @param array<string, mixed> $listing
      * @return array<string, mixed>
      */
+    /**
+     * The current user's favorited listing ids, resolved once per request.
+     * Returns an empty list for guests.
+     *
+     * @return array<int, int>
+     */
+    private function favoriteIdSet(): array
+    {
+        if ($this->favoriteIds === null) {
+            $userId = ApiAuth::id();
+            $this->favoriteIds = $userId !== null ? Favorite::idsForUser($userId) : [];
+        }
+        return $this->favoriteIds;
+    }
+
     private function listingPayload(array $listing, bool $detailed = false): array
     {
         $payload = [
@@ -676,6 +1695,8 @@ final class ApiController extends Controller
             'featured' => (bool) ($listing['is_featured'] ?? false),
             'duration' => (string) ($listing['duration'] ?? ''),
             'owner_name' => (string) ($listing['owner_name'] ?? ''),
+            'owner_id' => (int) ($listing['user_id'] ?? 0),
+            'favorited' => in_array((int) $listing['id'], $this->favoriteIdSet(), true),
         ];
 
         if ($detailed) {
@@ -685,6 +1706,103 @@ final class ApiController extends Controller
         }
 
         return $payload;
+    }
+
+    /**
+     * @param array<string, mixed> $user
+     * @return array<string, mixed>
+     */
+    private function chatPartnerPayload(array $user): array
+    {
+        return [
+            'id' => (int) $user['id'],
+            'name' => (string) ($user['name'] ?? ''),
+            'avatar' => api_img_src((string) ($user['avatar'] ?? ''), 'user' . $user['id']),
+            'bio' => (string) ($user['bio'] ?? ''),
+            'online' => User::isOnline((int) $user['id']),
+        ];
+    }
+
+    /**
+     * Shape a chat message for the mobile app, optionally auto-translating an
+     * incoming message into the reader's language ($lang).
+     *
+     * @param array<string, mixed> $m
+     * @return array<string, mixed>
+     */
+    private function messagePayload(array $m, int $userId, ?string $lang): array
+    {
+        $mine = (int) $m['sender_id'] === $userId;
+        $isRead = (int) ($m['is_read'] ?? 0) === 1;
+
+        $payload = [
+            'id' => (int) $m['id'],
+            'body' => (string) $m['body'],
+            'mine' => $mine,
+            'created_at' => (string) $m['created_at'],
+            'status' => $mine ? ($isRead ? 'read' : 'delivered') : 'read',
+        ];
+
+        // Only the other person's messages need translating for this reader.
+        if (!$mine && $lang !== null) {
+            $translation = $this->translateMessage($m, $lang);
+            if ($translation !== null) {
+                $payload['translated_body'] = $translation['body'];
+                $payload['source_lang'] = $translation['source'];
+                $payload['translated'] = true;
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Return a cached/fresh translation of a message into $target, or null when
+     * translation isn't needed (same language) or unavailable.
+     *
+     * @param array<string, mixed> $m
+     * @return array{body: string, source: ?string}|null
+     */
+    private function translateMessage(array $m, string $target): ?array
+    {
+        $id = (int) $m['id'];
+        $original = (string) $m['body'];
+        $known = $m['source_lang'] ?? null;
+        $known = is_string($known) && $known !== '' ? $known : null;
+
+        // Already known to be in the reader's language → nothing to do.
+        if ($known !== null && $this->normLang($known) === $this->normLang($target)) {
+            return null;
+        }
+
+        $cached = Message::cachedTranslation($id, $target);
+        if ($cached !== null) {
+            return ['body' => $cached['body'], 'source' => $cached['source_lang']];
+        }
+
+        $result = Translator::translate($original, $target, $known);
+
+        // Remember the detected language so we can skip this message next time.
+        if ($known === null && !empty($result['source'])) {
+            Message::setSourceLang($id, (string) $result['source']);
+        }
+        if (!$result['translated']) {
+            return null;
+        }
+
+        Message::cacheTranslation($id, $target, $result['body'], $result['source']);
+        return ['body' => $result['body'], 'source' => $result['source']];
+    }
+
+    private function langParam(): ?string
+    {
+        $lang = strtolower(trim((string) $this->input('lang', '')));
+        return $lang === '' ? null : $lang;
+    }
+
+    private function normLang(string $code): string
+    {
+        return strtolower(explode('-', trim($code))[0]);
     }
 
     /**
@@ -754,19 +1872,232 @@ final class ApiController extends Controller
      * @param array<string, mixed> $booking
      * @return array<string, mixed>
      */
-    private function bookingPayload(array $booking): array
+    private function bookingPayload(array $booking, ?int $viewerId = null): array
     {
+        $listingId = (int) $booking['listing_id'];
+        $status = (string) $booking['status'];
+        $disputeStatus = (string) ($booking['dispute_status'] ?? '');
+        $paid = (string) ($booking['payment_status'] ?? '') === 'paid';
+
+        $reviewed = $viewerId !== null && Review::userHasReviewed($listingId, $viewerId);
+        // A tourist can review a finished tour once, and report a paid booking
+        // that hasn't already been reported.
+        $canReview = $status === 'completed' && !$reviewed;
+        $canReport = $disputeStatus === '' && $paid && in_array($status, ['confirmed', 'completed'], true);
+
         return [
             'id' => (int) $booking['id'],
-            'listing_id' => (int) $booking['listing_id'],
+            'listing_id' => $listingId,
             'listing_title' => (string) ($booking['listing_title'] ?? ''),
             'listing_slug' => (string) ($booking['listing_slug'] ?? ''),
             'image' => api_img_src((string) ($booking['cover_image'] ?? ''), 'listing' . $booking['listing_id']),
             'booking_date' => (string) $booking['booking_date'],
+            'booking_time' => (string) ($booking['booking_time'] ?? ''),
             'guests' => (int) $booking['guests'],
             'total_amount' => (float) $booking['total_amount'],
-            'status' => (string) $booking['status'],
+            'status' => $status,
             'area' => (string) ($booking['area'] ?? ''),
+            'reviewed' => $reviewed,
+            'can_review' => $canReview,
+            'can_report' => $canReport,
+            'dispute_status' => $disputeStatus,
         ];
+    }
+
+    // ── Reviews & problem reports ─────────────────────────────────────────────
+
+    /** POST /api/reviews — leave a rating/review for a completed experience. */
+    public function submitReview(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $body = $this->jsonBody();
+        $listingId = (int) ($body['listing_id'] ?? 0);
+        $rating = (int) ($body['rating'] ?? 0);
+        $comment = trim((string) ($body['comment'] ?? ''));
+        $title = trim((string) ($body['title'] ?? ''));
+
+        $listing = $listingId > 0 ? Listing::find($listingId) : null;
+        if ($listing === null) {
+            $this->json(['error' => 'Listing not found.'], 404);
+            return;
+        }
+        if ($rating < 1 || $rating > 5) {
+            $this->json(['error' => 'Please choose a rating from 1 to 5 stars.'], 422);
+            return;
+        }
+        if ($comment === '') {
+            $this->json(['error' => 'Please write a short review.'], 422);
+            return;
+        }
+        if (!Booking::hasCompletedBooking($listingId, $userId)) {
+            $this->json(['error' => 'You can only review experiences you have booked.'], 403);
+            return;
+        }
+        if (Review::userHasReviewed($listingId, $userId)) {
+            $this->json(['error' => 'You have already reviewed this experience.'], 409);
+            return;
+        }
+
+        Review::create($listingId, $userId, $rating, $title, $comment, date('Y-m-d'));
+
+        $this->json([
+            'success' => true,
+            'summary' => Review::summary($listingId),
+        ], 201);
+    }
+
+    /** GET /api/disputes?booking_id= — the tourist's existing report, if any. */
+    public function myDispute(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $bookingId = (int) $this->input('booking_id', 0);
+        $booking = $bookingId > 0 ? Booking::find($bookingId) : null;
+        if ($booking === null || (int) $booking['user_id'] !== $userId) {
+            $this->json(['error' => 'Booking not found.'], 404);
+            return;
+        }
+
+        $dispute = Dispute::forBooking($bookingId);
+        $this->json(['dispute' => $dispute !== null ? $this->disputePayload($dispute) : null]);
+    }
+
+    /**
+     * POST /api/disputes — report a problem with a guide/booking to the admin.
+     * Sent as multipart/form-data so photo evidence can be attached.
+     */
+    public function submitDispute(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Unauthorized.'], 401);
+            return;
+        }
+
+        $bookingId = (int) ($_POST['booking_id'] ?? 0);
+        $type = trim((string) ($_POST['problem_type'] ?? ''));
+        $description = trim((string) ($_POST['description'] ?? ''));
+        $amountRaw = trim((string) ($_POST['amount_requested'] ?? ''));
+
+        $booking = $bookingId > 0 ? Booking::find($bookingId) : null;
+        if ($booking === null || (int) $booking['user_id'] !== $userId) {
+            $this->json(['error' => 'Booking not found.'], 404);
+            return;
+        }
+        if (!Payment::isPaid($bookingId)) {
+            $this->json(['error' => 'You can only report a problem on a paid booking.'], 403);
+            return;
+        }
+        if (!in_array((string) $booking['status'], ['confirmed', 'completed', 'disputed'], true)) {
+            $this->json(['error' => 'This booking cannot be reported yet.'], 422);
+            return;
+        }
+        if (Dispute::forBooking($bookingId) !== null) {
+            $this->json(['error' => 'You already reported a problem for this booking.'], 409);
+            return;
+        }
+        if (!isset(Dispute::TYPES[$type])) {
+            $this->json(['error' => 'Please choose a valid problem type.'], 422);
+            return;
+        }
+        if (mb_strlen($description) < 20) {
+            $this->json(['error' => 'Please describe the problem in at least 20 characters.'], 422);
+            return;
+        }
+        $amount = null;
+        if ($type === 'extra_payment') {
+            if ($amountRaw === '' || !is_numeric($amountRaw) || (float) $amountRaw <= 0) {
+                $this->json(['error' => 'Enter the extra amount the guide requested.'], 422);
+                return;
+            }
+            $amount = (float) $amountRaw;
+        }
+
+        $disputeId = Dispute::create([
+            'booking_id' => $bookingId,
+            'user_id' => $userId,
+            'guide_id' => (int) $booking['guide_id'],
+            'problem_type' => $type,
+            'amount_requested' => $amount,
+            'description' => $description,
+        ]);
+
+        // Attach any photo evidence (field "evidence" or "evidence[]").
+        foreach ($this->normalizeFiles($_FILES['evidence'] ?? null) as $file) {
+            $path = Upload::image($file, 'disputes');
+            if ($path !== null) {
+                DisputeFile::add($disputeId, $path, (string) ($file['name'] ?? ''));
+            }
+        }
+
+        Booking::updateStatus($bookingId, 'disputed');
+
+        $dispute = Dispute::find($disputeId);
+        $this->json([
+            'success' => true,
+            'dispute' => $dispute !== null ? $this->disputePayload($dispute) : null,
+        ], 201);
+    }
+
+    /**
+     * @param array<string, mixed> $d
+     * @return array<string, mixed>
+     */
+    private function disputePayload(array $d): array
+    {
+        return [
+            'id' => (int) $d['id'],
+            'booking_id' => (int) $d['booking_id'],
+            'problem_type' => (string) $d['problem_type'],
+            'problem_label' => Dispute::typeLabel((string) $d['problem_type']),
+            'amount_requested' => $d['amount_requested'] !== null ? (float) $d['amount_requested'] : null,
+            'description' => (string) $d['description'],
+            'status' => (string) $d['status'],
+            'status_label' => Dispute::statusLabel((string) $d['status']),
+            'admin_note' => (string) ($d['admin_note'] ?? ''),
+            'created_at' => (string) ($d['created_at'] ?? ''),
+        ];
+    }
+
+    /**
+     * Normalise a $_FILES entry (single file or PHP's arrayized multi-file
+     * shape) into a flat list of single-file arrays, skipping empty slots.
+     *
+     * @param array<string, mixed>|null $entry
+     * @return array<int, array<string, mixed>>
+     */
+    private function normalizeFiles(?array $entry): array
+    {
+        if (!is_array($entry) || !isset($entry['name'])) {
+            return [];
+        }
+        if (!is_array($entry['name'])) {
+            return $entry['error'] === UPLOAD_ERR_NO_FILE ? [] : [$entry];
+        }
+
+        $files = [];
+        $count = count($entry['name']);
+        for ($i = 0; $i < $count; $i++) {
+            if (($entry['error'][$i] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+                continue;
+            }
+            $files[] = [
+                'name' => $entry['name'][$i],
+                'type' => $entry['type'][$i],
+                'tmp_name' => $entry['tmp_name'][$i],
+                'error' => $entry['error'][$i],
+                'size' => $entry['size'][$i],
+            ];
+        }
+        return $files;
     }
 }

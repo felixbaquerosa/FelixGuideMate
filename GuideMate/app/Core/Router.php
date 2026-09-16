@@ -117,11 +117,12 @@ final class Router
                         Auth::logout();
                     }
                     if (Auth::check()) {
-                        // On the public pages a logged-in guide is shown Log in /
-                        // Sign up buttons. Acting on those means starting a fresh
-                        // session, so end the current one and let the form load
-                        // instead of bouncing them back into their account.
-                        if (Auth::hasRole('guide')) {
+                        // On the public pages a logged-in provider (guide, rental
+                        // or hotel partner) is shown Log in / Sign up buttons.
+                        // Acting on those means starting a fresh session, so end
+                        // the current one and let the form load instead of
+                        // bouncing them back into their account.
+                        if (Auth::isProvider()) {
                             Auth::logout();
                         } else {
                             redirect('/dashboard');
@@ -140,6 +141,23 @@ final class Router
                 case 'guide':
                     if (!Auth::hasRole('guide')) {
                         abort(403, 'Tour guides only.');
+                    }
+                    break;
+                case 'provider':
+                    // Any service provider (guide, rental partner, hotel partner).
+                    if (!Auth::isProvider()) {
+                        abort(403, 'Service providers only.');
+                    }
+                    break;
+                case 'listing_provider':
+                    // Providers who own & manage listings (guides + hotel partners).
+                    if (!Auth::managesListings()) {
+                        abort(403, 'Listing providers only.');
+                    }
+                    break;
+                case 'rental_admin':
+                    if (!Auth::hasRole('rental_admin')) {
+                        abort(403, 'Rental partners only.');
                     }
                     break;
                 default:

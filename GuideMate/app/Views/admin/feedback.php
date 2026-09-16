@@ -31,7 +31,10 @@ use App\Models\Feedback;
                 </thead>
                 <tbody>
                 <?php foreach ($items as $f): ?>
-                    <?php $rating = (int) ($f['rating'] ?? 0); ?>
+                    <?php
+                    $rating = (int) ($f['rating'] ?? 0);
+                    $status = (string) ($f['status'] ?? 'new');
+                    ?>
                     <tr>
                         <td><?= (int) $f['id'] ?></td>
                         <td>
@@ -40,10 +43,10 @@ use App\Models\Feedback;
                             <?php if (!empty($f['user_id'])): ?><br><small class="hint">Account #<?= (int) $f['user_id'] ?></small><?php endif; ?>
                         </td>
                         <td><?= e(Feedback::categoryLabel((string) ($f['category'] ?? 'general'))) ?></td>
-                        <td><?= $rating > 0 ? str_repeat('★', $rating) . str_repeat('☆', 5 - $rating) : '<span class="hint">—</span>' ?></td>
+                        <td><?php if ($rating > 0): ?><span class="fb-stars"><?= str_repeat('★', $rating) ?><span class="fb-stars-off"><?= str_repeat('★', 5 - $rating) ?></span></span><?php else: ?><span class="hint">—</span><?php endif; ?></td>
                         <td><p style="max-width:22rem;white-space:pre-wrap;margin:0;"><?= e((string) $f['message']) ?></p></td>
                         <td><small class="hint"><?= e(date('M j, Y g:i A', strtotime((string) $f['created_at']))) ?></small></td>
-                        <td><span class="pill"><?= e(Feedback::statusLabel((string) ($f['status'] ?? 'new'))) ?></span></td>
+                        <td><span class="pill pill-fb-<?= e($status) ?>"><?= e(Feedback::statusLabel($status)) ?></span></td>
                         <td>
                             <form method="post" action="<?= e(url('/admin/feedback/' . $f['id'] . '/status')) ?>" class="dispute-btns">
                                 <?= csrf_field() ?>

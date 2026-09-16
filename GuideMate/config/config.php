@@ -86,6 +86,27 @@ return [
         'mapbox_access_token' => env('MAPBOX_ACCESS_TOKEN', ''),
         'mapillary_access_token' => env('MAPILLARY_ACCESS_TOKEN', ''),
     ],
+    'social' => [
+        // DEMO mode lets "Continue with Google/Facebook" work without real OAuth
+        // apps (great for capstone demos). Flip SOCIAL_AUTH_DEMO=false and fill
+        // the client IDs below to require real, verified Google/Facebook tokens.
+        'demo' => (bool) env('SOCIAL_AUTH_DEMO', true),
+        // Comma-separated list of accepted Google OAuth client IDs (web, iOS,
+        // Android, Expo). A token is accepted if its "aud" matches any of these.
+        'google_client_ids' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('GOOGLE_OAUTH_CLIENT_IDS', ''))
+        ))),
+        // Server-side (Expo Go-compatible) Google flow. The Web client id +
+        // secret exchange the auth code; the redirect must be the PUBLIC https
+        // callback registered in Google (e.g. via a Cloudflare/ngrok tunnel).
+        'google_web_client_id' => (string) env('GOOGLE_OAUTH_WEB_CLIENT_ID', ''),
+        'google_client_secret' => (string) env('GOOGLE_OAUTH_CLIENT_SECRET', ''),
+        'google_redirect' => (string) env('GOOGLE_OAUTH_REDIRECT', ''),
+        'facebook_app_id' => (string) env('FACEBOOK_APP_ID', ''),
+        'facebook_app_secret' => (string) env('FACEBOOK_APP_SECRET', ''),
+        'facebook_redirect' => (string) env('FACEBOOK_OAUTH_REDIRECT', ''),
+    ],
     'hero' => [
         // 1080p default for smooth autoplay; 4K optional via HERO_VIDEO_4K (heavier, may stutter).
         'video_4k' => env('HERO_VIDEO_4K', 'https://videos.pexels.com/video-files/3571264/3571264-uhd_3840_2160_30fps.mp4'),

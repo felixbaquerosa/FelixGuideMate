@@ -76,6 +76,15 @@ final class ApiAuth
         if ($user === null || (int) ($user['is_active'] ?? 1) === 0) {
             return null;
         }
+
+        // Refresh presence once per request so chat can show online/offline.
+        static $touched = [];
+        $uid = (int) $user['id'];
+        if (!isset($touched[$uid])) {
+            $touched[$uid] = true;
+            User::touchLastSeen($uid);
+        }
+
         return $user;
     }
 

@@ -50,14 +50,6 @@ export default function RegisterScreen() {
     router.back();
   };
 
-  const handleGoogle = () => {
-    console.log('Continue with Google');
-  };
-
-  const handleFacebook = () => {
-    console.log('Continue with Facebook');
-  };
-
   // Password policy: 8-12 characters with an uppercase letter, a number, and a special character.
   const validatePassword = (value: string): string | null => {
     if (value.length < 8 || value.length > 12) {
@@ -153,25 +145,6 @@ export default function RegisterScreen() {
           showsVerticalScrollIndicator={false}
         >
           <Text style={[styles.sectionLabel, { color: theme.textMain }]}>Create Account</Text>
-
-          {/* Google */}
-          <TouchableOpacity style={[styles.socialButton, { backgroundColor: theme.inputBg }]} onPress={handleGoogle} activeOpacity={0.85}>
-            <Text style={styles.googleG}>G</Text>
-            <Text style={[styles.socialButtonText, { color: theme.textMain }]}>Continue with Google</Text>
-          </TouchableOpacity>
-
-          {/* Facebook */}
-          <TouchableOpacity style={[styles.socialButton, { backgroundColor: theme.inputBg }]} onPress={handleFacebook} activeOpacity={0.85}>
-            <Text style={styles.facebookF}>f</Text>
-            <Text style={[styles.socialButtonText, { color: theme.textMain }]}>Continue with Facebook</Text>
-          </TouchableOpacity>
-
-          {/* Divider */}
-          <View style={styles.dividerRow}>
-            <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
-            <Text style={[styles.dividerText, { color: theme.textSub }]}>or sign up with email</Text>
-            <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
-          </View>
 
           {/* Full Name */}
           <View style={[styles.inputWrapper, { backgroundColor: theme.inputBg }]}>

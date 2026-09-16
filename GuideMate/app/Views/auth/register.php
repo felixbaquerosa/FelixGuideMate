@@ -2,10 +2,15 @@
 /** @var array<string,string> $errors @var string $role */
 
 use App\Models\GuideDocument;
+use App\Models\User;
 
 $errors = $errors ?? [];
-$role = 'guide';
-$isGuide = true;
+// The web portal is for service providers. The applicant picks which kind.
+$selectedRole = old('role') !== '' ? old('role') : ($role ?? 'guide');
+if (!User::isProviderRole((string) $selectedRole)) {
+    $selectedRole = 'guide';
+}
+$providerLabels = User::PROVIDER_LABELS;
 ?>
 <a href="<?= e(url('/')) ?>" class="brand a-rise" style="margin-bottom:1.5rem;display:inline-flex;animation-delay:.05s;">
     <span class="brand-mark">◐</span><span class="brand-text">Guide<strong>Mate</strong></span>
@@ -16,7 +21,18 @@ $isGuide = true;
 <form method="post" action="<?= e(url('/register')) ?>" enctype="multipart/form-data" novalidate>
     <?= csrf_field() ?>
 
-    <input type="hidden" name="role" value="guide">
+    <div class="field-row a-rise" style="animation-delay:.24s;">
+        <label for="role">I want to join as</label>
+        <div class="input-wrap">
+            <span class="input-ic">🧭</span>
+            <select class="input has-ic" id="role" name="role">
+                <?php foreach ($providerLabels as $key => $label): ?>
+                    <option value="<?= e($key) ?>" <?= $selectedRole === $key ? 'selected' : '' ?>><?= e($label) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <p class="hint mb-0" id="roleHint"></p>
+    </div>
 
     <div class="field-row a-rise" style="animation-delay:.3s;">
         <label for="name">Full name</label>
@@ -56,11 +72,11 @@ $isGuide = true;
         Password must be <strong>8–12 characters</strong> and include an uppercase letter, a number, and a special character.
     </p>
 
-    <!-- Guide verification — shown only when "I'm a Guide" is selected -->
-    <div id="guideDocs" class="guide-docs a-rise" style="animation-delay:.54s;<?= $isGuide ? '' : 'display:none;' ?>">
+    <!-- Provider verification — every provider role is reviewed by an admin -->
+    <div id="guideDocs" class="guide-docs a-rise" style="animation-delay:.54s;">
         <div class="guide-docs-head">
-            <span class="guide-docs-badge">🛡️ Guide verification</span>
-            <p class="hint mb-0">To keep travelers safe, guides are reviewed by our admin team. Upload clear photos or PDFs (max 5MB each). Accepted: ID, license, tourism accreditation, certificates, employment verification, or association membership.</p>
+            <span class="guide-docs-badge">🛡️ Partner verification</span>
+            <p class="hint mb-0">To keep travelers safe, every partner is reviewed by our admin team before going live. Upload clear photos or PDFs (max 5MB each). Accepted: ID, business permit, license, accreditation, certificates, employment verification, or association membership.</p>
         </div>
 
         <div class="field-row">
@@ -101,3 +117,17 @@ $isGuide = true;
 
     <button class="btn btn-primary btn-block btn-lg a-rise" style="animation-delay:.6s;" type="submit">Create account</button>
 </form>
+
+<script>
+(function () {
+    var hints = {
+        guide: 'Lead tours and manage your own experience listings and bookings.',
+        rental_admin: 'List rental vehicles and handle incoming rental requests.',
+        hotel_admin: 'List your hotel / accommodation and manage guest bookings.'
+    };
+    var select = document.getElementById('role');
+    var hint = document.getElementById('roleHint');
+    function sync() { if (select && hint) { hint.textContent = hints[select.value] || ''; } }
+    if (select) { select.addEventListener('change', sync); sync(); }
+})();
+</script>

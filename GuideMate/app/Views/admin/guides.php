@@ -5,6 +5,7 @@
  */
 
 use App\Models\GuideDocument;
+use App\Models\User;
 
 $statusPill = [
     'pending' => 'pill-pending',
@@ -13,10 +14,11 @@ $statusPill = [
     'none' => 'pill-confirmed',
 ];
 ?>
-<h1>Guide applications</h1>
+<h1>Partner applications</h1>
+<p class="hint">Pending tour guides, rental partners and hotel partners awaiting verification.</p>
 
 <?php if ($guides === []): ?>
-    <div class="panel"><div class="empty-state" style="padding:2.5rem 1rem;"><p>No guide applications yet.</p></div></div>
+    <div class="panel"><div class="empty-state" style="padding:2.5rem 1rem;"><p>No partner applications yet.</p></div></div>
 <?php else: ?>
     <?php foreach ($guides as $g): ?>
         <?php $status = (string) ($g['guide_status'] ?? 'none'); $docs = $documents[(int) $g['id']] ?? []; ?>
@@ -24,6 +26,7 @@ $statusPill = [
             <div class="panel-head">
                 <div>
                     <h3 style="margin-bottom:.2rem;"><?= e($g['name']) ?>
+                        <span class="pill pill-confirmed"><?= e(User::PROVIDER_LABELS[$g['role']] ?? ucfirst((string) $g['role'])) ?></span>
                         <span class="pill <?= $statusPill[$status] ?? 'pill-pending' ?>"><?= e(ucfirst($status)) ?></span>
                     </h3>
                     <p class="hint mb-0"><?= e($g['email']) ?> · joined <?= e(date('M j, Y', strtotime($g['created_at']))) ?></p>
@@ -54,12 +57,12 @@ $statusPill = [
                     <?php if ($status !== 'approved'): ?>
                         <form method="post" action="<?= e(url('/admin/guides/' . $g['id'] . '/approve')) ?>">
                             <?= csrf_field() ?>
-                            <button class="btn btn-primary btn-sm">✓ Approve guide</button>
+                            <button class="btn btn-primary btn-sm">✓ Approve</button>
                         </form>
                     <?php endif; ?>
                     <form method="post" action="<?= e(url('/admin/guides/' . $g['id'] . '/reject')) ?>" class="reject-form">
                         <?= csrf_field() ?>
-                        <input class="input" type="text" name="note" placeholder="Reason (optional, shown to the guide)">
+                        <input class="input" type="text" name="note" placeholder="Reason (optional, shown to the applicant)">
                         <button class="btn btn-ghost btn-sm">Reject</button>
                     </form>
                 </div>

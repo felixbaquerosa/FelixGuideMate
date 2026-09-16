@@ -22,6 +22,10 @@ export type ApiMessage = {
   mine: boolean;
   created_at: string;
   status: ChatStatus;
+  // Present when the message was auto-translated into the reader's language.
+  translated_body?: string;
+  source_lang?: string | null;
+  translated?: boolean;
 };
 
 export type ApiConversation = {
@@ -40,6 +44,11 @@ export type ApiChatPartner = {
   avatar: string;
   bio: string;
   online: boolean;
+  // Populated by the guides directory endpoint (optional elsewhere).
+  rating?: number;
+  review_count?: number;
+  completed_tours?: number;
+  available?: boolean;
 };
 
 export type ApiCategory = {
@@ -71,6 +80,7 @@ export type ApiListing = {
   included?: string;
   not_included?: string;
   owner_id?: number;
+  favorited?: boolean;
 };
 
 export type ApiArea = { slug: string; name: string; tagline: string };
@@ -87,6 +97,32 @@ export type ApiBooking = {
   total_amount: number;
   status: string;
   area: string;
+  reviewed?: boolean;
+  can_review?: boolean;
+  can_report?: boolean;
+  dispute_status?: string;
+};
+
+// Problem types for reporting a guide to the admin (mirrors Dispute::TYPES).
+export const DISPUTE_TYPES: { value: string; label: string }[] = [
+  { value: 'extra_payment', label: 'Guide asked for extra payment' },
+  { value: 'no_show', label: 'Guide did not show up' },
+  { value: 'service_mismatch', label: 'Service was very different from listing' },
+  { value: 'unsafe', label: 'Unsafe or unprofessional behavior' },
+  { value: 'other', label: 'Other problem' },
+];
+
+export type ApiDispute = {
+  id: number;
+  booking_id: number;
+  problem_type: string;
+  problem_label: string;
+  amount_requested: number | null;
+  description: string;
+  status: string;
+  status_label: string;
+  admin_note: string;
+  created_at: string;
 };
 
 export type HomePayload = {
@@ -193,6 +229,8 @@ export const getListing = (slug: string) =>
     summary: { average: number; total: number } | any;
     favorited: boolean;
     already_booked: boolean;
+    has_reviewed: boolean;
+    can_review: boolean;
     booked_slots: { date: string; time: string }[];
   }>(`/api/listings/${slug}`);
 
@@ -204,6 +242,14 @@ export const apiRegister = (name: string, email: string, password: string) =>
     method: 'POST',
     body: { name, email, password },
   });
+
+// Sign in with Google/Facebook. In demo mode we send an anonymous per-device
+// `subject`; in live mode we send the verified provider `token`.
+export const apiSocialLogin = (payload: {
+  provider: 'google' | 'facebook';
+  subject?: string;
+  token?: string;
+}) => api<{ token: string; user: ApiUser }>('/api/auth/social', { method: 'POST', body: payload });
 
 export const apiForgotPassword = (email: string) =>
   api<{ message: string; dev_reset_url?: string }>('/api/auth/forgot-password', {
@@ -259,7 +305,44 @@ export const getRentalVehicles = () => api<{ vehicles: ApiRentalVehicle[] }>('/a
 
 export type PaymentMethod = 'gcash' | 'instapay' | 'card';
 
-export const createRentalRequest = (payload: {
+export type ApiRental = {
+  id: number;
+  vehicle_name: string;
+  vehicle_type: string;
+  shop_name: string;
+  location: string;
+  pickup_date: string;
+  rental_days: number;
+  total_amount: number;
+  status: string;
+  status_label: string;
+  payment_status: 'unpaid' | 'paid' | 'refunded';
+  payment_method: string;
+  notes: string;
+  report_status: 'none' | 'open' | 'refunded' | 'rejected';
+  report_type: string;
+  report_label: string;
+  report_message: string;
+  owner_report_note: string;
+  can_report: boolean;
+  created_at: string;
+};
+
+// Problem types a tourist can report against a reserved unit.
+export const RENTAL_REPORT_TYPES: { value: string; label: string }[] = [
+  { value: 'vehicle_defect', label: 'Vehicle problem / breakdown' },
+  { value: 'not_delivered', label: 'Unit was not delivered' },
+  { value: 'not_as_described', label: 'Not as described / wrong unit' },
+  { value: 'overcharged', label: 'Overcharged / extra fees' },
+  { value: 'safety', label: 'Unsafe or unfit to drive' },
+  { value: 'other', label: 'Other problem' },
+];
+
+/**
+ * Reserve a vehicle with FULL up-front payment. Sent as multipart/form-data so
+ * the tourist can attach a photo of the valid ID that the owner will hold.
+ */
+export async function createRentalRequest(payload: {
   vehicle_id: string;
   vehicle_name: string;
   vehicle_type: string;
@@ -270,7 +353,71 @@ export const createRentalRequest = (payload: {
   price_per_day: number;
   customer_phone: string;
   notes?: string;
-}) => api<{ request: { id: number } }>('/api/rentals', { method: 'POST', body: payload });
+  id_type: string;
+  id_number?: string;
+  id_document_uri: string;
+  payment_method: PaymentMethod;
+  payment_reference?: string;
+  card_last4?: string;
+}): Promise<{ request: ApiRental }> {
+  const form = new FormData();
+  form.append('vehicle_id', payload.vehicle_id);
+  form.append('vehicle_name', payload.vehicle_name);
+  form.append('vehicle_type', payload.vehicle_type);
+  form.append('shop_name', payload.shop_name);
+  if (payload.location) form.append('location', payload.location);
+  form.append('pickup_date', payload.pickup_date);
+  form.append('rental_days', String(payload.rental_days));
+  form.append('price_per_day', String(payload.price_per_day));
+  form.append('customer_phone', payload.customer_phone);
+  if (payload.notes) form.append('notes', payload.notes);
+  form.append('id_type', payload.id_type);
+  if (payload.id_number) form.append('id_number', payload.id_number);
+  form.append('payment_method', payload.payment_method);
+  if (payload.payment_reference) form.append('payment_reference', payload.payment_reference);
+  if (payload.card_last4) form.append('card_last4', payload.card_last4);
+
+  const uri = payload.id_document_uri;
+  const name = uri.split('/').pop() || `id_${Date.now()}.jpg`;
+  const ext = (/\.(\w+)$/.exec(name)?.[1] ?? 'jpg').toLowerCase();
+  const type = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  form.append('id_document', { uri, name, type } as unknown as Blob);
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/rentals`, {
+      method: 'POST',
+      headers,
+      body: form,
+      signal: controller.signal,
+    });
+  } catch {
+    throw new Error('Could not complete your reservation. Check your connection and try again.');
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error((data && (data.error || data.message)) || 'Reservation failed.') as Error & { code?: string };
+    if (response.status === 401 || response.status === 403) err.code = 'UNAUTHORIZED';
+    throw err;
+  }
+  return data as { request: ApiRental };
+}
+
+export const getMyRentals = () => api<{ rentals: ApiRental[] }>('/api/rentals/mine');
+
+export const reportRental = (payload: {
+  rental_id: number;
+  problem_type: string;
+  description: string;
+}) => api<{ request: ApiRental | null }>('/api/rentals/report', { method: 'POST', body: payload });
 
 export const createBooking = (payload: {
   listing_id: number;
@@ -317,6 +464,74 @@ export const toggleFavorite = (listingId: number) =>
     method: 'POST',
     body: { listing_id: listingId },
   });
+
+// ── Reviews ──
+
+export const submitReview = (payload: {
+  listing_id: number;
+  rating: number;
+  comment: string;
+  title?: string;
+}) =>
+  api<{ success: boolean; summary: { avg: number; count: number } }>('/api/reviews', {
+    method: 'POST',
+    body: payload,
+  });
+
+// ── Problem reports (disputes) ──
+
+export const getMyDispute = (bookingId: number) =>
+  api<{ dispute: ApiDispute | null }>(`/api/disputes?booking_id=${bookingId}`);
+
+// Report uses multipart/form-data so photo evidence can be attached.
+export async function submitDispute(payload: {
+  booking_id: number;
+  problem_type: string;
+  description: string;
+  amount_requested?: string;
+  photos?: string[];
+}): Promise<{ success: boolean; dispute: ApiDispute | null }> {
+  const form = new FormData();
+  form.append('booking_id', String(payload.booking_id));
+  form.append('problem_type', payload.problem_type);
+  form.append('description', payload.description);
+  if (payload.amount_requested) form.append('amount_requested', payload.amount_requested);
+
+  (payload.photos ?? []).forEach((uri, i) => {
+    const name = uri.split('/').pop() || `evidence_${Date.now()}_${i}.jpg`;
+    const ext = (/\.(\w+)$/.exec(name)?.[1] ?? 'jpg').toLowerCase();
+    const type = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+    // "evidence[]" so PHP receives an array when multiple photos are attached.
+    form.append('evidence[]', { uri, name, type } as unknown as Blob);
+  });
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/api/disputes`, {
+      method: 'POST',
+      headers,
+      body: form,
+      signal: controller.signal,
+    });
+  } catch {
+    throw new Error('Could not submit your report. Check your connection and try again.');
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error((data && (data.error || data.message)) || 'Report failed.') as Error & { code?: string };
+    if (response.status === 401 || response.status === 403) err.code = 'UNAUTHORIZED';
+    throw err;
+  }
+  return data as { success: boolean; dispute: ApiDispute | null };
+}
 
 // ── Profile ──
 
@@ -369,14 +584,14 @@ export const getConversations = (archived = false) =>
     `/api/messages${archived ? '?archived=1' : ''}`
   );
 
-export const getThread = (partnerId: number) =>
+export const getThread = (partnerId: number, lang?: string) =>
   api<{ partner: ApiChatPartner; messages: ApiMessage[]; archived: boolean }>(
-    `/api/messages/thread?partner=${partnerId}`
+    `/api/messages/thread?partner=${partnerId}${lang ? `&lang=${encodeURIComponent(lang)}` : ''}`
   );
 
-export const pollThread = (partnerId: number, since: number) =>
+export const pollThread = (partnerId: number, since: number, lang?: string) =>
   api<{ new: ApiMessage[]; statuses: { id: number; status: ChatStatus }[]; partner_online: boolean }>(
-    `/api/messages/poll?partner=${partnerId}&since=${since}`
+    `/api/messages/poll?partner=${partnerId}&since=${since}${lang ? `&lang=${encodeURIComponent(lang)}` : ''}`
   );
 
 export const sendMessage = (partnerId: number, body: string, listingId?: number) =>

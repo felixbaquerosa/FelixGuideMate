@@ -106,6 +106,26 @@ final class Auth
     }
 
     /**
+     * True when the signed-in user is a service provider (tour guide, rental
+     * partner or hotel partner) — the roles that use the web dashboard portal.
+     */
+    public static function isProvider(): bool
+    {
+        $user = self::user();
+        return $user !== null && User::isProviderRole((string) ($user['role'] ?? ''));
+    }
+
+    /**
+     * True when the signed-in user can own & manage listings (guides and hotel
+     * partners). Rental partners manage rental requests instead of listings.
+     */
+    public static function managesListings(): bool
+    {
+        $user = self::user();
+        return $user !== null && in_array($user['role'] ?? '', ['guide', 'hotel_admin'], true);
+    }
+
+    /**
      * Generate (once) and return the CSRF token for this session.
      */
     public static function csrfToken(): string

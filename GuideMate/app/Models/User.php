@@ -9,6 +9,26 @@ use App\Core\Database;
 final class User
 {
     /**
+     * Roles that offer services and go through the verification workflow
+     * (document upload + admin approval via the `guide_status` column).
+     */
+    public const PROVIDER_ROLES = ['guide', 'rental_admin', 'hotel_admin'];
+
+    /**
+     * Human-readable labels for the provider roles.
+     */
+    public const PROVIDER_LABELS = [
+        'guide' => 'Tour Guide',
+        'rental_admin' => 'Rental Partner',
+        'hotel_admin' => 'Hotel Partner',
+    ];
+
+    public static function isProviderRole(string $role): bool
+    {
+        return in_array($role, self::PROVIDER_ROLES, true);
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public static function find(int $id): ?array
@@ -31,15 +51,73 @@ final class User
 
     /**
      * Create a user with a hashed password. Returns the new id.
-     * Guides start with a 'pending' verification status; everyone else 'none'.
+     * Provider roles (guide, rental_admin, hotel_admin) start 'pending' until
+     * an admin reviews their submitted documents; everyone else 'none'.
      */
     public static function create(string $name, string $email, string $password, string $role): int
     {
-        $guideStatus = $role === 'guide' ? 'pending' : 'none';
+        $guideStatus = self::isProviderRole($role) ? 'pending' : 'none';
         return Database::insert(
             'INSERT INTO users (name, email, password, role, guide_status) VALUES (?, ?, ?, ?, ?)',
             [$name, $email, password_hash($password, PASSWORD_BCRYPT), $role, $guideStatus]
         );
+    }
+
+    /**
+     * Find a user previously linked to a social provider.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function findByOAuth(string $provider, string $oauthId): ?array
+    {
+        return Database::first(
+            'SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ?',
+            [$provider, $oauthId]
+        );
+    }
+
+    /**
+     * Create an ANONYMOUS tourist from a social login. We deliberately store no
+     * real email/password — only the provider + its opaque user id — so the
+     * admin can never see the Google/Facebook email or password. A throwaway
+     * internal email satisfies the NOT NULL/UNIQUE column but is never shown.
+     */
+    public static function createOAuthUser(string $provider, string $oauthId, ?string $name = null): int
+    {
+        // Use the real Google/Facebook display name when we have it; only fall
+        // back to a generic label if the provider gave us nothing. The name is
+        // NOT the email, so showing it keeps the account confidential.
+        $label = trim((string) $name);
+        if ($label === '') {
+            $label = $provider === 'facebook' ? 'Facebook User' : 'Google User';
+        }
+        // Non-identifying placeholder email; not a real, reachable address.
+        $email = $provider . '_' . bin2hex(random_bytes(10)) . '@social.guidemate.local';
+        // Random, unusable password hash (social users never log in by password).
+        $password = password_hash(bin2hex(random_bytes(24)), PASSWORD_BCRYPT);
+
+        return Database::insert(
+            'INSERT INTO users (name, email, password, role, guide_status, oauth_provider, oauth_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [$label, $email, $password, 'tourist', 'none', $provider, $oauthId]
+        );
+    }
+
+    /**
+     * Backfill a social account's display name when it's still the generic
+     * placeholder ("Google User" / "Facebook User"). Never overwrites a name
+     * the user may have already customised.
+     */
+    public static function renameIfPlaceholder(int $id, string $currentName, string $newName): void
+    {
+        $newName = trim($newName);
+        if ($newName === '') {
+            return;
+        }
+        if (!preg_match('/^(Google|Facebook) User$/', trim($currentName))) {
+            return;
+        }
+        Database::run('UPDATE users SET name = ? WHERE id = ?', [$newName, $id]);
     }
 
     /**
@@ -74,6 +152,32 @@ final class User
     public static function updateAvatar(int $id, string $path): void
     {
         Database::run('UPDATE users SET avatar = ? WHERE id = ?', [$path, $id]);
+    }
+
+    /**
+     * Record that the user was just active (drives online/offline in chat).
+     * Best-effort: silently ignored if the column has not been migrated yet.
+     */
+    public static function touchLastSeen(int $id): void
+    {
+        try {
+            Database::run('UPDATE users SET last_seen_at = NOW() WHERE id = ?', [$id]);
+        } catch (\Throwable $e) {
+            // last_seen_at column not present yet — ignore.
+        }
+    }
+
+    /**
+     * A user counts as online if they pinged the API within the last 90s.
+     */
+    public static function isOnline(int $id, int $withinSeconds = 90): bool
+    {
+        $row = Database::first('SELECT last_seen_at FROM users WHERE id = ?', [$id]);
+        $seen = $row['last_seen_at'] ?? null;
+        if ($seen === null || $seen === '') {
+            return false;
+        }
+        return (time() - strtotime((string) $seen)) <= $withinSeconds;
     }
 
     public static function updatePassword(int $id, string $password): void
@@ -197,6 +301,39 @@ final class User
     {
         $row = Database::first(
             'SELECT COUNT(*) AS c FROM users WHERE role = "guide" AND guide_status = ?',
+            [$status]
+        );
+        return (int) ($row['c'] ?? 0);
+    }
+
+    /**
+     * All provider accounts (guides, rental & hotel partners), optionally
+     * filtered by verification status. Used by the admin applications queue.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function providers(?string $status = null): array
+    {
+        if ($status !== null) {
+            return Database::all(
+                'SELECT * FROM users
+                 WHERE role IN ("guide","rental_admin","hotel_admin") AND guide_status = ?
+                 ORDER BY created_at DESC',
+                [$status]
+            );
+        }
+        return Database::all(
+            'SELECT * FROM users
+             WHERE role IN ("guide","rental_admin","hotel_admin")
+             ORDER BY FIELD(guide_status, "pending", "rejected", "approved", "none"), created_at DESC'
+        );
+    }
+
+    public static function countProvidersByStatus(string $status): int
+    {
+        $row = Database::first(
+            'SELECT COUNT(*) AS c FROM users
+             WHERE role IN ("guide","rental_admin","hotel_admin") AND guide_status = ?',
             [$status]
         );
         return (int) ($row['c'] ?? 0);

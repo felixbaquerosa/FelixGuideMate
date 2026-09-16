@@ -29,19 +29,20 @@
 
 <div class="panel">
     <div class="panel-head">
-        <h3>Guide applications <?php if ((int) $stats['pendingGuides'] > 0): ?><span class="badge"><?= (int) $stats['pendingGuides'] ?></span><?php endif; ?></h3>
+        <h3>Partner applications <?php if ((int) $stats['pendingGuides'] > 0): ?><span class="badge"><?= (int) $stats['pendingGuides'] ?></span><?php endif; ?></h3>
         <a href="<?= e(url('/admin/guides')) ?>" class="btn btn-ghost btn-sm">Review all</a>
     </div>
     <div class="panel-body" style="padding:0;overflow-x:auto;">
         <?php if ($pendingGuides === []): ?>
-            <div class="empty-state" style="padding:2.5rem 1rem;"><p>✅ No guide applications awaiting review.</p></div>
+            <div class="empty-state" style="padding:2.5rem 1rem;"><p>✅ No partner applications awaiting review.</p></div>
         <?php else: ?>
             <table class="table">
-                <thead><tr><th>Guide</th><th>Email</th><th>Applied</th><th></th></tr></thead>
+                <thead><tr><th>Applicant</th><th>Type</th><th>Email</th><th>Applied</th><th></th></tr></thead>
                 <tbody>
                 <?php foreach ($pendingGuides as $g): ?>
                     <tr>
                         <td><strong><?= e($g['name']) ?></strong></td>
+                        <td><?= e(\App\Models\User::PROVIDER_LABELS[$g['role']] ?? ucfirst((string) $g['role'])) ?></td>
                         <td><?= e($g['email']) ?></td>
                         <td><?= e(time_ago($g['created_at'])) ?></td>
                         <td style="white-space:nowrap;"><a href="<?= e(url('/admin/guides')) ?>" class="btn btn-primary btn-sm">Review documents</a></td>

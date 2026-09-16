@@ -119,4 +119,63 @@ final class Message
             [$userId, $partnerId, $partnerId, $userId]
         );
     }
+
+    /**
+     * My sent messages in a thread that the partner has now read — lets the
+     * chat update the delivered/read ticks while polling.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function readReceipts(int $userId, int $partnerId): array
+    {
+        return Database::all(
+            'SELECT id FROM messages
+             WHERE sender_id = ? AND receiver_id = ? AND is_read = 1
+             ORDER BY id ASC',
+            [$userId, $partnerId]
+        );
+    }
+
+    /** Persist the detected original language of a message (best-effort). */
+    public static function setSourceLang(int $id, string $lang): void
+    {
+        try {
+            Database::run('UPDATE messages SET source_lang = ? WHERE id = ?', [$lang, $id]);
+        } catch (\Throwable $e) {
+            // source_lang column not migrated yet — ignore.
+        }
+    }
+
+    /**
+     * @return array{body: string, source_lang: ?string}|null
+     */
+    public static function cachedTranslation(int $messageId, string $target): ?array
+    {
+        try {
+            $row = Database::first(
+                'SELECT body, source_lang FROM message_translations WHERE message_id = ? AND target_lang = ?',
+                [$messageId, $target]
+            );
+        } catch (\Throwable $e) {
+            return null;
+        }
+        if ($row === null) {
+            return null;
+        }
+        return ['body' => (string) $row['body'], 'source_lang' => $row['source_lang'] ?? null];
+    }
+
+    public static function cacheTranslation(int $messageId, string $target, string $body, ?string $source): void
+    {
+        try {
+            Database::run(
+                'INSERT INTO message_translations (message_id, target_lang, body, source_lang)
+                 VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE body = VALUES(body), source_lang = VALUES(source_lang)',
+                [$messageId, $target, $body, $source]
+            );
+        } catch (\Throwable $e) {
+            // Cache is best-effort; ignore write failures.
+        }
+    }
 }

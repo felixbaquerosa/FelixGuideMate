@@ -132,9 +132,9 @@ export default function SettingsScreen() {
           <Row label={t('account_security')} onPress={() => requireLogin(() => router.push('/account-security'))} />
           <Row
             label={t('fingerprint')}
-            value={fingerprintOn ? t('enabled') : t('not_enabled')}
-            valueColor={fingerprintOn ? theme.accent : undefined}
-            showDot={!fingerprintOn}
+            value={loggedIn && fingerprintOn ? t('enabled') : t('not_enabled')}
+            valueColor={loggedIn && fingerprintOn ? theme.accent : undefined}
+            showDot={!(loggedIn && fingerprintOn)}
             onPress={() => requireLogin(() => router.push('/fingerprint'))}
           />
         </View>

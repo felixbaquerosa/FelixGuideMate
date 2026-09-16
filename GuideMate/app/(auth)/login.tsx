@@ -1,15 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import HumanVerification from '../../components/HumanVerification';
-import { hasBiometricLogin, login as loginUser, loginWithBiometrics } from '../../lib/authStore';
+import { hasBiometricLogin, login as loginUser, loginWithBackendOAuth, loginWithBiometrics, loginWithSocial } from '../../lib/authStore';
+import { isProviderConfigured, SocialProvider } from '../../lib/socialAuth';
 import { getSavedName } from '../../lib/biometric';
+import { LANGUAGES, LanguageCode, usePreferences } from '../../lib/preferences';
 import {
+    ActivityIndicator,
     Dimensions,
+    FlatList,
     ImageBackground,
     KeyboardAvoidingView,
+    Modal,
     Platform,
-    SafeAreaView,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -35,6 +39,18 @@ export default function LoginScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [savedName, setSavedName] = useState('');
+  const [langOpen, setLangOpen] = useState(false);
+  const [socialBusy, setSocialBusy] = useState<SocialProvider | null>(null);
+
+  const { language, setLanguage, t } = usePreferences();
+  const currentLang = LANGUAGES.find((l) => l.code === language);
+
+  // If the OAuth redirect route bounced back with an error, show it here.
+  const { social_error } = useLocalSearchParams<{ social_error?: string | string[] }>();
+  useEffect(() => {
+    const msg = Array.isArray(social_error) ? social_error[0] : social_error;
+    if (msg) setError(msg);
+  }, [social_error]);
 
   // Dynamic colors mapping based on system device theme
   const theme = {
@@ -105,6 +121,27 @@ export default function LoginScreen() {
     }
   };
 
+  const handleSocial = async (provider: SocialProvider) => {
+    if (socialBusy) return;
+    setError('');
+    setSocialBusy(provider);
+    try {
+      // Configured (Google or Facebook): real login via the Expo Go-friendly
+      // backend flow. Unconfigured: anonymous demo fallback.
+      if (isProviderConfigured(provider)) {
+        await loginWithBackendOAuth(provider);
+      } else {
+        await loginWithSocial(provider);
+      }
+      router.replace('/(tabs)');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Sign-in failed. Please try again.';
+      if (!/cancel/i.test(msg)) setError(msg);
+    } finally {
+      setSocialBusy(null);
+    }
+  };
+
   const handleForgotPassword = () => {
     router.push('/(auth)/forgot-password');
   };
@@ -113,16 +150,8 @@ export default function LoginScreen() {
     router.push('/(auth)/register');
   };
 
-  const handleGoogle = () => {
-    console.log('Continue with Google');
-  };
-
-  const handleFacebook = () => {
-    console.log('Continue with Facebook');
-  };
-
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
+    <View style={[styles.container, { backgroundColor: theme.bg }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
       {/* ── TOP HALF: Hero Image ── */}
@@ -138,13 +167,19 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.taglineContainer}>
-          <Text style={styles.taglineText}>Welcome back, explorer.</Text>
-          <Text style={styles.taglineSubText}>Sign in to continue your journey.</Text>
+          <Text style={styles.taglineText}>{t('login_welcome')}</Text>
+          <Text style={styles.taglineSubText}>{t('login_subtitle')}</Text>
         </View>
 
-        <TouchableOpacity style={styles.closeButton} onPress={handleClose} activeOpacity={0.8}>
-          <Ionicons name="close" size={18} color="#FFFFFF" />
-        </TouchableOpacity>
+        <View style={styles.topActions}>
+          <TouchableOpacity style={styles.langButton} onPress={() => setLangOpen(true)} activeOpacity={0.8}>
+            <Ionicons name="globe-outline" size={16} color="#FFFFFF" />
+            <Text style={styles.langButtonText}>{(currentLang?.code ?? 'EN').toUpperCase()}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.closeButton} onPress={handleClose} activeOpacity={0.8}>
+            <Ionicons name="close" size={18} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
       </ImageBackground>
 
       {/* ── BOTTOM HALF: Auth Panel ── */}
@@ -158,7 +193,7 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={[styles.sectionLabel, { color: theme.textMain }]}>Log In</Text>
+          <Text style={[styles.sectionLabel, { color: theme.textMain }]}>{t('login_title')}</Text>
 
           {/* Fingerprint quick login (only when an account is saved on device) */}
           {bioAvailable ? (
@@ -171,13 +206,13 @@ export default function LoginScreen() {
               >
                 <Ionicons name="finger-print" size={22} color={theme.accent} style={{ marginRight: 10 }} />
                 <Text style={[styles.bioButtonText, { color: theme.accent }]}>
-                  {savedName ? `Log in as ${savedName}` : 'Log in with fingerprint'}
+                  {savedName ? `${t('login_as')} ${savedName}` : t('login_fp')}
                 </Text>
               </TouchableOpacity>
 
               <View style={styles.dividerRow}>
                 <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
-                <Text style={[styles.dividerText, { color: theme.textSub }]}>or use password</Text>
+                <Text style={[styles.dividerText, { color: theme.textSub }]}>{t('or_password')}</Text>
                 <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
               </View>
             </>
@@ -188,7 +223,7 @@ export default function LoginScreen() {
             <Ionicons name="mail-outline" size={18} color={theme.placeholderColor} style={styles.inputIcon} />
             <TextInput
               style={[styles.textInput, { color: theme.textMain }]}
-              placeholder="Email address"
+              placeholder={t('email_ph')}
               placeholderTextColor={theme.placeholderColor}
               value={email}
               onChangeText={setEmail}
@@ -203,7 +238,7 @@ export default function LoginScreen() {
             <Ionicons name="lock-closed-outline" size={18} color={theme.placeholderColor} style={styles.inputIcon} />
             <TextInput
               style={[styles.textInput, { color: theme.textMain }]}
-              placeholder="Password"
+              placeholder={t('password_ph')}
               placeholderTextColor={theme.placeholderColor}
               value={password}
               onChangeText={setPassword}
@@ -220,7 +255,7 @@ export default function LoginScreen() {
           </View>
 
           {/* Human verification (Cloudflare-style) */}
-          <HumanVerification isDark={isDark} onVerifiedChange={setVerified} />
+          <HumanVerification isDark={isDark} onVerifiedChange={setVerified} label={t('verify_human')} />
 
           {/* Inline error message */}
           {error ? (
@@ -237,42 +272,105 @@ export default function LoginScreen() {
             activeOpacity={0.85}
             disabled={submitting}
           >
-            <Text style={styles.loginButtonText}>{submitting ? 'Signing in...' : 'Login'}</Text>
+            <Text style={styles.loginButtonText}>{submitting ? t('signing_in') : t('login_btn')}</Text>
           </TouchableOpacity>
 
           {/* Forgot Button */}
           <TouchableOpacity style={styles.forgotButton} onPress={handleForgotPassword} activeOpacity={0.7}>
-            <Text style={[styles.forgotText, { color: theme.accent }]}>Forgot Password?</Text>
-          </TouchableOpacity>
-
-          {/* Divider Line */}
-          <View style={styles.dividerRow}>
-            <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
-            <Text style={[styles.dividerText, { color: theme.textSub }]}>or continue with</Text>
-            <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
-          </View>
-
-          {/* Social Sign-In Wrappers */}
-          <TouchableOpacity style={[styles.socialButton, { backgroundColor: theme.inputBg }]} onPress={handleGoogle} activeOpacity={0.85}>
-            <Text style={styles.googleG}>G</Text>
-            <Text style={[styles.socialButtonText, { color: theme.textMain }]}>Continue with Google</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.socialButton, { backgroundColor: theme.inputBg }]} onPress={handleFacebook} activeOpacity={0.85}>
-            <Text style={styles.facebookF}>f</Text>
-            <Text style={[styles.socialButtonText, { color: theme.textMain }]}>Continue with Facebook</Text>
+            <Text style={[styles.forgotText, { color: theme.accent }]}>{t('forgot_pw')}</Text>
           </TouchableOpacity>
 
           {/* Sign Up Redirect Row */}
           <View style={styles.signUpRow}>
-            <Text style={[styles.signUpPrompt, { color: theme.textSub }]}>Don't have an account? </Text>
+            <Text style={[styles.signUpPrompt, { color: theme.textSub }]}>{t('no_account')}</Text>
             <TouchableOpacity onPress={handleSignUp} activeOpacity={0.7}>
-              <Text style={[styles.signUpLink, { color: theme.accent }]}>Sign up</Text>
+              <Text style={[styles.signUpLink, { color: theme.accent }]}>{t('sign_up')}</Text>
             </TouchableOpacity>
           </View>
+
+          {/* ── Social sign-in ── */}
+          <View style={styles.dividerRow}>
+            <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
+            <Text style={[styles.dividerText, { color: theme.textSub }]}>{t('or_continue_with')}</Text>
+            <View style={[styles.dividerLine, { backgroundColor: theme.dividerLine }]} />
+          </View>
+
+          <TouchableOpacity
+            style={[styles.socialButton, { backgroundColor: theme.inputBg, borderColor: theme.dividerLine }, socialBusy && { opacity: 0.6 }]}
+            onPress={() => handleSocial('google')}
+            activeOpacity={0.85}
+            disabled={!!socialBusy}
+          >
+            {socialBusy === 'google' ? (
+              <ActivityIndicator color={theme.textMain} />
+            ) : (
+              <>
+                <Ionicons name="logo-google" size={19} color="#DB4437" style={{ marginRight: 10 }} />
+                <Text style={[styles.socialText, { color: theme.textMain }]}>{t('continue_google')}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.socialButton, { backgroundColor: '#1877F2', borderColor: '#1877F2' }, socialBusy && { opacity: 0.6 }]}
+            onPress={() => handleSocial('facebook')}
+            activeOpacity={0.85}
+            disabled={!!socialBusy}
+          >
+            {socialBusy === 'facebook' ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="logo-facebook" size={19} color="#FFFFFF" style={{ marginRight: 10 }} />
+                <Text style={[styles.socialText, { color: '#FFFFFF' }]}>{t('continue_facebook')}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          {/* Continue as guest */}
+          <TouchableOpacity style={styles.guestButton} onPress={handleClose} activeOpacity={0.7}>
+            <Ionicons name="arrow-forward-outline" size={16} color={theme.textSub} style={{ marginRight: 6 }} />
+            <Text style={[styles.guestText, { color: theme.textSub }]}>{t('continue_guest')}</Text>
+          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+
+      {/* Language picker */}
+      <Modal visible={langOpen} transparent animationType="slide" onRequestClose={() => setLangOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setLangOpen(false)} />
+          <View style={[styles.modalSheet, { backgroundColor: theme.bg }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.textMain }]}>{t('choose_language')}</Text>
+              <TouchableOpacity onPress={() => setLangOpen(false)}>
+                <Ionicons name="close" size={24} color={theme.textSub} />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={LANGUAGES}
+              keyExtractor={(item) => item.code}
+              style={{ maxHeight: 380 }}
+              renderItem={({ item }) => {
+                const selected = item.code === language;
+                return (
+                  <TouchableOpacity
+                    style={[styles.langOption, { borderTopColor: theme.dividerLine }]}
+                    activeOpacity={0.6}
+                    onPress={() => {
+                      setLanguage(item.code as LanguageCode);
+                      setLangOpen(false);
+                    }}
+                  >
+                    <Text style={[styles.langOptionText, { color: theme.textMain }]}>{item.label}</Text>
+                    {selected ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
@@ -287,7 +385,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.42)',
+    backgroundColor: 'rgba(0,0,0,0.52)',
   },
   brandContainer: {
     marginTop: 52,
@@ -299,6 +397,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     lineHeight: 32,
     letterSpacing: 1.5,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
   },
   taglineContainer: {
     marginLeft: 22,
@@ -309,16 +410,44 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.3,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   taglineSubText: {
-    color: 'rgba(255,255,255,0.65)',
+    color: 'rgba(255,255,255,0.92)',
     fontSize: 13,
     marginTop: 2,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
-  closeButton: {
+  topActions: {
     position: 'absolute',
     top: 48,
     right: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  langButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 38,
+    paddingHorizontal: 12,
+    borderRadius: 19,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  langButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  closeButton: {
     width: 38,
     height: 38,
     borderRadius: 19,
@@ -421,26 +550,53 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 50,
+    borderWidth: 1,
     paddingVertical: 14,
     marginBottom: 12,
   },
-  socialButtonText: {
+  socialText: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
     letterSpacing: 0.2,
   },
-  googleG: {
-    color: '#4CAF50',
-    fontSize: 18,
-    fontWeight: '800',
-    marginRight: 10,
+  guestButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 18,
+    paddingVertical: 6,
   },
-  facebookF: {
-    color: '#4A90D9',
-    fontSize: 20,
-    fontWeight: '800',
-    marginRight: 10,
+  guestText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 30,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+  },
+  modalTitle: { fontSize: 17, fontWeight: '700' },
+  langOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  langOptionText: { fontSize: 16, fontWeight: '500' },
   signUpRow: {
     flexDirection: 'row',
     justifyContent: 'center',

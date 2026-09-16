@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -20,9 +21,21 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import CalendarPicker from '../components/CalendarPicker';
 import { useTheme } from '../lib/theme';
-import { ApiRentalVehicle, createRentalRequest, getRentalVehicles, isUnauthorized } from '../services/api';
+import { ApiRentalVehicle, createRentalRequest, getRentalVehicles, isUnauthorized, PaymentMethod } from '../services/api';
 
 const TIME_SLOTS = ['07:00', '08:00', '09:00', '10:00', '11:00', '13:00', '15:00', '17:00'];
+
+const ID_TYPES = [
+  "Driver's License",
+  'Passport',
+  'National ID (PhilSys)',
+  'UMID',
+  'Postal ID',
+  'Other government ID',
+];
+
+const QR_EWALLET = require('../assets/images/payment/qr-ewallet.png');
+const QR_INSTAPAY = require('../assets/images/payment/qr-instapay.png');
 
 // Each rental unit maps 1:1 to a real model, so these photos are model-accurate:
 // scooter = Honda Click 125i, motorcycle = KTM 390 Adventure, ebike = City E-Bike,
@@ -50,6 +63,16 @@ export default function CarRentalsScreen() {
   const [contactPhone, setContactPhone] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Verification (valid ID held for the owner)
+  const [idType, setIdType] = useState('');
+  const [idNumber, setIdNumber] = useState('');
+  const [idImage, setIdImage] = useState('');
+
+  // Payment (full amount up front)
+  const [payMethod, setPayMethod] = useState<PaymentMethod | ''>('');
+  const [payReference, setPayReference] = useState('');
+  const [cardLast4, setCardLast4] = useState('');
 
   const loadVehicles = useCallback(async () => {
     setLoading(true);
@@ -86,6 +109,24 @@ export default function CarRentalsScreen() {
     setRentalDays(1);
     setContactPhone('');
     setNotes('');
+    setIdType('');
+    setIdNumber('');
+    setIdImage('');
+    setPayMethod('');
+    setPayReference('');
+    setCardLast4('');
+  };
+
+  const pickIdPhoto = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission needed', 'Please allow photo access to attach a photo of your ID.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.6 });
+    if (result.canceled) return;
+    const uri = result.assets[0]?.uri;
+    if (uri) setIdImage(uri);
   };
 
   const submitRequest = async () => {
@@ -102,6 +143,27 @@ export default function CarRentalsScreen() {
       Alert.alert('Phone required', 'Enter a valid contact phone so the rentals team can reach you.');
       return;
     }
+    if (!idType) {
+      Alert.alert('Select an ID', 'Please choose which valid ID you are presenting.');
+      return;
+    }
+    if (!idImage) {
+      Alert.alert('ID photo required', 'Please upload a clear photo of your valid ID. It stays on hold with the owner until you return the unit.');
+      return;
+    }
+    if (!payMethod) {
+      Alert.alert('Choose payment', 'Please select how you want to pay the full amount.');
+      return;
+    }
+    if (payMethod === 'card') {
+      if (!/^\d{4}$/.test(cardLast4)) {
+        Alert.alert('Card details', 'Enter the last 4 digits of your card.');
+        return;
+      }
+    } else if (payReference.trim().length < 4) {
+      Alert.alert('Reference required', 'Enter the reference / confirmation number from your payment app.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -116,15 +178,24 @@ export default function CarRentalsScreen() {
         price_per_day: selected.price_per_day,
         customer_phone: contactPhone.replace(/\s+/g, ''),
         notes: [pickupTime ? `Pickup time: ${pickupTime}` : '', notes].filter(Boolean).join(' · '),
+        id_type: idType,
+        id_number: idNumber.trim() || undefined,
+        id_document_uri: idImage,
+        payment_method: payMethod,
+        payment_reference: payMethod === 'card' ? undefined : payReference.trim(),
+        card_last4: payMethod === 'card' ? cardLast4 : undefined,
       });
-      Alert.alert('Request sent', `${selected.shop} will contact you to confirm your ${selected.type.toLowerCase()} rental.`);
-      setSelected(null);
+      Alert.alert(
+        'Reservation confirmed',
+        `You paid ₱${total.toLocaleString()} for your ${selected.type.toLowerCase()} rental. ${selected.shop} will contact you to arrange delivery. Track it under "My rentals".`,
+        [{ text: 'OK', onPress: () => { setSelected(null); router.push('/my-rentals'); } }]
+      );
     } catch (e) {
       if (isUnauthorized(e)) {
-        Alert.alert('Sign in required', 'Please log in to send a rental request.');
+        Alert.alert('Sign in required', 'Please log in to reserve a vehicle.');
         return;
       }
-      Alert.alert('Request failed', 'Could not send your rental request. Please try again.');
+      Alert.alert('Reservation failed', e instanceof Error ? e.message : 'Could not complete your reservation. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -198,7 +269,9 @@ export default function CarRentalsScreen() {
           <Ionicons name="chevron-back" size={26} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.text }]}>Vehicle Rentals</Text>
-        <View style={styles.headerBtn} />
+        <TouchableOpacity onPress={() => router.push('/my-rentals')} style={styles.headerBtn} activeOpacity={0.7}>
+          <Ionicons name="receipt-outline" size={22} color={colors.text} />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -297,8 +370,120 @@ export default function CarRentalsScreen() {
                   style={[styles.textArea, { backgroundColor: colors.card, borderColor: colors.border, color: colors.text }]}
                 />
 
+                {/* ── Verification: valid ID held for the owner ── */}
+                <View style={[styles.sectionDivider, { borderTopColor: colors.border }]} />
+                <View style={styles.sectionHeadRow}>
+                  <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
+                  <Text style={[styles.sectionHead, { color: colors.text }]}>Verification</Text>
+                </View>
+                <Text style={[styles.sectionNote, { color: colors.textSub }]}>
+                  A valid ID is required to reserve. It stays on hold with {selected.shop} and is returned when you bring the unit back.
+                </Text>
+
+                <Text style={[styles.label, { color: colors.textSub }]}>ID type</Text>
+                <View style={styles.slotRow}>
+                  {ID_TYPES.map((t) => (
+                    <TouchableOpacity
+                      key={t}
+                      style={[styles.chip, { borderColor: colors.border, backgroundColor: idType === t ? colors.primary : colors.card }]}
+                      onPress={() => setIdType(t)}
+                    >
+                      <Text style={{ color: idType === t ? '#FFFFFF' : colors.text, fontWeight: '700', fontSize: 12 }}>{t}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={[styles.label, { color: colors.textSub }]}>ID number (optional)</Text>
+                <TextInput
+                  value={idNumber}
+                  onChangeText={setIdNumber}
+                  placeholder="e.g. N01-23-456789"
+                  placeholderTextColor={colors.textSub}
+                  autoCapitalize="characters"
+                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.text }]}
+                />
+
+                <Text style={[styles.label, { color: colors.textSub }]}>Photo of your ID</Text>
+                {idImage ? (
+                  <View style={styles.idPreviewWrap}>
+                    <Image source={{ uri: idImage }} style={styles.idPreview} resizeMode="cover" />
+                    <TouchableOpacity style={styles.idRemove} onPress={() => setIdImage('')} activeOpacity={0.8}>
+                      <Ionicons name="close-circle" size={26} color="#EF4444" />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.idUpload, { borderColor: colors.border, backgroundColor: colors.card }]}
+                    onPress={pickIdPhoto}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="camera-outline" size={26} color={colors.textSub} />
+                    <Text style={[styles.idUploadText, { color: colors.textSub }]}>Upload ID photo</Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* ── Payment: pay the whole amount to reserve ── */}
+                <View style={[styles.sectionDivider, { borderTopColor: colors.border }]} />
+                <View style={styles.sectionHeadRow}>
+                  <Ionicons name="card" size={18} color={colors.primary} />
+                  <Text style={[styles.sectionHead, { color: colors.text }]}>Payment</Text>
+                </View>
+                <Text style={[styles.sectionNote, { color: colors.textSub }]}>
+                  Pay the full amount now to lock in your reservation.
+                </Text>
+
+                <View style={styles.slotRow}>
+                  {([
+                    { key: 'gcash', label: 'GCash / e-Wallet' },
+                    { key: 'instapay', label: 'InstaPay' },
+                    { key: 'card', label: 'Card' },
+                  ] as { key: PaymentMethod; label: string }[]).map((m) => (
+                    <TouchableOpacity
+                      key={m.key}
+                      style={[styles.chip, { borderColor: colors.border, backgroundColor: payMethod === m.key ? colors.primary : colors.card }]}
+                      onPress={() => { setPayMethod(m.key); setPayReference(''); setCardLast4(''); }}
+                    >
+                      <Text style={{ color: payMethod === m.key ? '#FFFFFF' : colors.text, fontWeight: '700', fontSize: 12 }}>{m.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {payMethod === 'gcash' || payMethod === 'instapay' ? (
+                  <>
+                    <View style={styles.qrWrap}>
+                      <Image source={payMethod === 'gcash' ? QR_EWALLET : QR_INSTAPAY} style={styles.qrImage} resizeMode="contain" />
+                    </View>
+                    <Text style={[styles.sectionNote, { color: colors.textSub, textAlign: 'center' }]}>
+                      Scan the QR, pay ₱{total.toLocaleString()}, then enter your reference number.
+                    </Text>
+                    <TextInput
+                      value={payReference}
+                      onChangeText={setPayReference}
+                      placeholder="Reference / confirmation no."
+                      placeholderTextColor={colors.textSub}
+                      autoCapitalize="characters"
+                      style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.text }]}
+                    />
+                  </>
+                ) : null}
+
+                {payMethod === 'card' ? (
+                  <>
+                    <Text style={[styles.label, { color: colors.textSub }]}>Last 4 digits of card</Text>
+                    <TextInput
+                      value={cardLast4}
+                      onChangeText={(v) => setCardLast4(v.replace(/\D/g, '').slice(0, 4))}
+                      placeholder="1234"
+                      placeholderTextColor={colors.textSub}
+                      keyboardType="number-pad"
+                      maxLength={4}
+                      style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.text }]}
+                    />
+                  </>
+                ) : null}
+
                 <View style={styles.totalRow}>
-                  <Text style={[styles.totalLabel, { color: colors.textSub }]}>Estimated total</Text>
+                  <Text style={[styles.totalLabel, { color: colors.textSub }]}>Total to pay now</Text>
                   <Text style={[styles.totalValue, { color: colors.primary }]}>₱{total.toLocaleString()}</Text>
                 </View>
 
@@ -308,7 +493,7 @@ export default function CarRentalsScreen() {
                   disabled={submitting}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.sendButtonText}>{submitting ? 'Sending…' : 'Send request'}</Text>
+                  <Text style={styles.sendButtonText}>{submitting ? 'Processing…' : `Pay ₱${total.toLocaleString()} & reserve`}</Text>
                 </TouchableOpacity>
               </ScrollView>
             ) : null}
@@ -355,6 +540,18 @@ const styles = StyleSheet.create({
   label: { marginTop: 12, marginBottom: 8, fontSize: 13, fontWeight: '700' },
   slotRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   slot: { borderWidth: 1, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14 },
+  chip: { borderWidth: 1, borderRadius: 12, paddingVertical: 9, paddingHorizontal: 13 },
+  sectionDivider: { borderTopWidth: 1, marginTop: 20, marginBottom: 14 },
+  sectionHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionHead: { fontSize: 17, fontWeight: '800' },
+  sectionNote: { fontSize: 12.5, lineHeight: 18, marginTop: 6 },
+  idUpload: { borderWidth: 1.5, borderStyle: 'dashed', borderRadius: 14, paddingVertical: 22, alignItems: 'center', justifyContent: 'center' },
+  idUploadText: { fontSize: 13, fontWeight: '700', marginTop: 6 },
+  idPreviewWrap: { position: 'relative', alignSelf: 'flex-start' },
+  idPreview: { width: 160, height: 108, borderRadius: 12, backgroundColor: '#00000011' },
+  idRemove: { position: 'absolute', top: -10, right: -10, backgroundColor: '#FFFFFF', borderRadius: 13 },
+  qrWrap: { alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, marginTop: 12 },
+  qrImage: { width: 210, height: 210 },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   stepBtn: { width: 40, height: 40, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   stepCount: { fontSize: 18, fontWeight: '800', minWidth: 24, textAlign: 'center' },

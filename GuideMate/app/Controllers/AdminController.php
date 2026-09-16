@@ -14,7 +14,6 @@ use App\Models\GuideDocument;
 use App\Models\Listing;
 use App\Models\Message;
 use App\Models\Payment;
-use App\Models\RentalRequest;
 use App\Models\Review;
 use App\Models\User;
 use App\Services\NotificationService;
@@ -31,21 +30,13 @@ final class AdminController extends Controller
                 'guides' => User::countByRole('guide'),
                 'listings' => Listing::count('approved'),
                 'pending' => Listing::count('pending'),
-                'pendingGuides' => User::countGuidesByStatus('pending'),
+                'pendingGuides' => User::countProvidersByStatus('pending'),
                 'openDisputes' => Dispute::countOpen(),
                 'revenue' => Payment::totalRevenue(),
             ],
             'pending' => Listing::pending(),
-            'pendingGuides' => User::guides('pending'),
+            'pendingGuides' => User::providers('pending'),
             'recentReviews' => Review::recent(6),
-        ], 'admin');
-    }
-
-    public function rentals(): void
-    {
-        $this->view('admin/rentals', [
-            'title' => 'Vehicle Rentals',
-            'requests' => RentalRequest::all(),
         ], 'admin');
     }
 
@@ -71,33 +62,19 @@ final class AdminController extends Controller
         redirect('/admin/feedback');
     }
 
-    public function updateRentalStatus(string $id): void
-    {
-        $this->verifyCsrf();
-        $status = (string) $this->input('status', '');
-        if (!in_array($status, ['pending', 'approved', 'contacted', 'cancelled', 'completed'], true)) {
-            flash('error', 'Invalid rental status.');
-            redirect('/admin/rentals');
-        }
-        $note = trim((string) $this->input('admin_note', ''));
-        RentalRequest::updateStatus((int) $id, $status, $note !== '' ? $note : null);
-        AuditLog::recordAction('rental.status', 'rental_request', (int) $id, ['status' => $status]);
-        flash('success', 'Rental request updated.');
-        redirect('/admin/rentals');
-    }
-
     public function guides(): void
     {
         // Only applications awaiting review are listed. Once approved (or
-        // rejected) a guide drops off this queue. Approved guides are managed
-        // from the Users page (where they can be revoked).
-        $guides = User::guides('pending');
+        // rejected) a provider drops off this queue. Approved providers are
+        // managed from the Users page (where they can be revoked). This queue
+        // covers all provider roles: guides, rental partners and hotel partners.
+        $guides = User::providers('pending');
         $documents = [];
         foreach ($guides as $g) {
             $documents[(int) $g['id']] = GuideDocument::forUser((int) $g['id']);
         }
         $this->view('admin/guides', [
-            'title' => 'Guide Applications',
+            'title' => 'Partner Applications',
             'guides' => $guides,
             'documents' => $documents,
         ], 'admin');

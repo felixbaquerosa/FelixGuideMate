@@ -18,15 +18,15 @@ $pageTitle = $title ?? 'Admin';
 <header class="admin-header">
     <div class="admin-header-inner">
         <a href="<?= e(url('/admin')) ?>" class="brand brand-light">
-            <span class="brand-mark">◐</span><span class="brand-text">Guide<strong>Mate</strong></span>
+            <span class="brand-mark"></span><span class="brand-text">Guide<strong>Mate</strong></span>
             <span class="admin-tag">Admin</span>
         </a>
         <div class="admin-user">
-            <span>👤 <?= e($admin['name'] ?? 'Admin') ?></span>
-            <a href="<?= e(url('/')) ?>" target="_blank" class="btn btn-ghost btn-sm" style="color:#fff;border-color:rgba(255,255,255,.25);">View site ↗</a>
+            <span class="admin-user-name"><?= admin_icon('user', 16) ?><?= e($admin['name'] ?? 'Admin') ?></span>
+            <a href="<?= e(url('/')) ?>" target="_blank" class="btn btn-ghost btn-sm" style="color:#fff;border-color:rgba(255,255,255,.25);"><?= admin_icon('external', 15) ?>View site</a>
             <form method="post" action="<?= e(url('/admin/logout')) ?>" style="display:inline;">
                 <?= csrf_field() ?>
-                <button type="submit" class="btn btn-primary btn-sm">Sign out</button>
+                <button type="submit" class="btn btn-primary btn-sm"><?= admin_icon('logout', 15) ?>Sign out</button>
             </form>
         </div>
     </div>

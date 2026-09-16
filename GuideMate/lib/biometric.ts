@@ -9,6 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 
 const BIO_KEY = 'guidemate_biometric_enabled';
 const CRED_KEY = 'guidemate_saved_login';
+const TOKEN_KEY = 'guidemate_saved_token';
 const NAME_KEY = 'guidemate_saved_name';
 
 export type SavedCredentials = { email: string; password: string };
@@ -52,6 +53,25 @@ export async function getSavedCredentials(): Promise<SavedCredentials | null> {
   }
 }
 
+// Social accounts (Google/Facebook) have no password to replay, so we store
+// the app session token instead. A fingerprint check then restores it.
+export async function saveSocialToken(token: string, name: string): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(TOKEN_KEY, token);
+    await AsyncStorage.setItem(NAME_KEY, name);
+  } catch {
+    // ignore
+  }
+}
+
+export async function getSavedSocialToken(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export async function getSavedName(): Promise<string | null> {
   try {
     return await AsyncStorage.getItem(NAME_KEY);
@@ -63,6 +83,7 @@ export async function getSavedName(): Promise<string | null> {
 export async function clearSavedCredentials(): Promise<void> {
   try {
     await SecureStore.deleteItemAsync(CRED_KEY);
+    await SecureStore.deleteItemAsync(TOKEN_KEY);
     await AsyncStorage.removeItem(NAME_KEY);
   } catch {
     // ignore

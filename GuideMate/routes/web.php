@@ -20,6 +20,7 @@ use App\Controllers\ListingController;
 use App\Controllers\LocaleController;
 use App\Controllers\MessageController;
 use App\Controllers\ProfileController;
+use App\Controllers\RentalController;
 use App\Controllers\ReviewController;
 
 $router->get('/policy', [HomeController::class, 'policy']);
@@ -84,22 +85,30 @@ $router->post('/listing/{id}/contact', [MessageController::class, 'contactGuide'
 // ---- Dashboard (all roles) ------------------------------------------------
 $router->get('/dashboard', [DashboardController::class, 'index'], ['auth']);
 
-// ---- Guide management -----------------------------------------------------
-$router->get('/dashboard/verification', [GuideController::class, 'verification'], ['guide']);
-$router->post('/dashboard/verification', [GuideController::class, 'submitVerification'], ['guide']);
-$router->get('/dashboard/listings', [GuideController::class, 'listings'], ['guide']);
-$router->get('/dashboard/listings/create', [GuideController::class, 'create'], ['guide']);
-$router->post('/dashboard/listings', [GuideController::class, 'store'], ['guide']);
-$router->get('/dashboard/listings/{id}/edit', [GuideController::class, 'edit'], ['guide']);
-$router->post('/dashboard/listings/{id}', [GuideController::class, 'update'], ['guide']);
-$router->post('/dashboard/listings/{id}/delete', [GuideController::class, 'destroy'], ['guide']);
-$router->get('/dashboard/bookings', [GuideController::class, 'bookings'], ['guide']);
-$router->get('/dashboard/bookings/verify', [GuideController::class, 'showVerifyBooking'], ['guide']);
-$router->post('/dashboard/bookings/verify', [GuideController::class, 'verifyBooking'], ['guide']);
-$router->post('/dashboard/bookings/{id}/status', [GuideController::class, 'updateBookingStatus'], ['guide']);
-$router->get('/dashboard/listings/{id}/availability', [GuideController::class, 'availability'], ['guide']);
-$router->post('/dashboard/listings/{id}/availability/block', [GuideController::class, 'blockDate'], ['guide']);
-$router->post('/dashboard/listings/{id}/availability/unblock', [GuideController::class, 'unblockDate'], ['guide']);
+// ---- Provider verification (guides, rental & hotel partners) --------------
+$router->get('/dashboard/verification', [GuideController::class, 'verification'], ['provider']);
+$router->post('/dashboard/verification', [GuideController::class, 'submitVerification'], ['provider']);
+
+// ---- Listing management (guides + hotel partners) -------------------------
+$router->get('/dashboard/listings', [GuideController::class, 'listings'], ['listing_provider']);
+$router->get('/dashboard/listings/create', [GuideController::class, 'create'], ['listing_provider']);
+$router->post('/dashboard/listings', [GuideController::class, 'store'], ['listing_provider']);
+$router->get('/dashboard/listings/{id}/edit', [GuideController::class, 'edit'], ['listing_provider']);
+$router->post('/dashboard/listings/{id}', [GuideController::class, 'update'], ['listing_provider']);
+$router->post('/dashboard/listings/{id}/delete', [GuideController::class, 'destroy'], ['listing_provider']);
+$router->get('/dashboard/bookings', [GuideController::class, 'bookings'], ['listing_provider']);
+$router->get('/dashboard/bookings/verify', [GuideController::class, 'showVerifyBooking'], ['listing_provider']);
+$router->post('/dashboard/bookings/verify', [GuideController::class, 'verifyBooking'], ['listing_provider']);
+$router->post('/dashboard/bookings/{id}/status', [GuideController::class, 'updateBookingStatus'], ['listing_provider']);
+$router->get('/dashboard/listings/{id}/availability', [GuideController::class, 'availability'], ['listing_provider']);
+$router->post('/dashboard/listings/{id}/availability/block', [GuideController::class, 'blockDate'], ['listing_provider']);
+$router->post('/dashboard/listings/{id}/availability/unblock', [GuideController::class, 'unblockDate'], ['listing_provider']);
+
+// ---- Rental partner management (relocated from the admin portal) -----------
+$router->get('/dashboard/rentals', [RentalController::class, 'requests'], ['rental_admin']);
+$router->post('/dashboard/rentals/{id}/status', [RentalController::class, 'updateStatus'], ['rental_admin']);
+$router->post('/dashboard/rentals/{id}/refund', [RentalController::class, 'refund'], ['rental_admin']);
+$router->post('/dashboard/rentals/{id}/reject-report', [RentalController::class, 'rejectReport'], ['rental_admin']);
 
 // ---- Admin portal (separate auth, isolated from public users) -------------
 $router->get('/admin/login', [AdminAuthController::class, 'showLogin']);
@@ -109,8 +118,6 @@ $router->post('/admin/2fa', [AdminAuthController::class, 'verifyTwoFa']);
 $router->post('/admin/logout', [AdminAuthController::class, 'logout']);
 
 $router->get('/admin', [AdminController::class, 'index'], ['admin']);
-$router->get('/admin/rentals', [AdminController::class, 'rentals'], ['admin']);
-$router->post('/admin/rentals/{id}/status', [AdminController::class, 'updateRentalStatus'], ['admin']);
 $router->get('/admin/feedback', [AdminController::class, 'feedback'], ['admin']);
 $router->post('/admin/feedback/{id}/status', [AdminController::class, 'updateFeedbackStatus'], ['admin']);
 $router->get('/admin/analytics', [AdminController::class, 'analytics'], ['admin']);

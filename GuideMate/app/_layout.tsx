@@ -1,4 +1,5 @@
 import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { useColorScheme } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
@@ -23,6 +24,9 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <PreferencesProvider>
+        {/* Global status bar: keeps the phone's clock/battery icons visible on
+            every screen (auto-picks dark icons in light mode, light in dark). */}
+        <StatusBar style="auto" translucent />
         <Stack screenOptions={{ headerShown: false }}>
         {/* 1. Point to the individual landing screen entry point */}
         <Stack.Screen name="(auth)/login" />
@@ -31,11 +35,17 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)/register" />
         <Stack.Screen name="(auth)/forgot-password" />
 
+        {/* Catches the Google/Facebook backend OAuth redirect (deep link) */}
+        <Stack.Screen name="auth/[provider]" />
+
         {/* 3. Map the main dashboard tab group entry point layout */}
         <Stack.Screen name="(tabs)" />
 
         {/* 4. Things to do in Cebu list screen */}
         <Stack.Screen name="things-to-do" />
+
+        {/* Search with recent history */}
+        <Stack.Screen name="search" />
 
         {/* 5. Single listing detail screen */}
         <Stack.Screen name="listing/[slug]" />

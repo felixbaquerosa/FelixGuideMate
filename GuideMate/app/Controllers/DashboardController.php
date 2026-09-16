@@ -10,6 +10,7 @@ use App\Models\Booking;
 use App\Models\Favorite;
 use App\Models\Listing;
 use App\Models\Message;
+use App\Models\RentalRequest;
 use App\Models\User;
 
 final class DashboardController extends Controller
@@ -23,8 +24,68 @@ final class DashboardController extends Controller
         // through the public user session.
         match ($role) {
             'guide' => $this->guide($user),
+            'hotel_admin' => $this->hotelAdmin($user),
+            'rental_admin' => $this->rentalAdmin($user),
             default => $this->tourist($user),
         };
+    }
+
+    /**
+     * Hotel Partner dashboard — mirrors the guide dashboard, but the partner's
+     * listings are hotels/accommodation. Reuses the owner-scoped listing and
+     * booking queries so the same tools work unchanged.
+     *
+     * @param array<string, mixed> $user
+     */
+    private function hotelAdmin(array $user): void
+    {
+        Booking::reconcileOrphanRefunds();
+        Auth::refreshUser();
+        $user = Auth::user() ?? $user;
+        $this->view('dashboard/hotel', [
+            'title' => 'Hotel Dashboard',
+            'user' => $user,
+            'listings' => Listing::forOwner((int) $user['id']),
+            'recentBookings' => array_slice(Booking::forGuide((int) $user['id']), 0, 6),
+            'bookingCount' => Booking::countForGuide((int) $user['id']),
+            'revenue' => Booking::revenueForGuide((int) $user['id']),
+            'guideStats' => Booking::guideRatingStats((int) $user['id']),
+            'earningsByMonth' => Booking::earningsPerMonth((int) $user['id'], 6),
+            'unread' => Message::unreadCount((int) $user['id']),
+        ]);
+    }
+
+    /**
+     * Rental Partner dashboard — manages incoming vehicle rental requests
+     * (relocated here from the admin portal).
+     *
+     * @param array<string, mixed> $user
+     */
+    private function rentalAdmin(array $user): void
+    {
+        $requests = RentalRequest::all();
+        $countBy = static function (array $rows, string $status): int {
+            return count(array_filter($rows, static fn ($r) => ($r['status'] ?? '') === $status));
+        };
+        $revenue = 0.0;
+        foreach ($requests as $r) {
+            if (in_array($r['status'] ?? '', ['approved', 'contacted', 'completed'], true)) {
+                $revenue += (float) ($r['total_amount'] ?? 0);
+            }
+        }
+        $this->view('dashboard/rental', [
+            'title' => 'Rental Dashboard',
+            'user' => $user,
+            'requests' => array_slice($requests, 0, 6),
+            'stats' => [
+                'total' => count($requests),
+                'pending' => $countBy($requests, 'pending'),
+                'approved' => $countBy($requests, 'approved') + $countBy($requests, 'contacted'),
+                'completed' => $countBy($requests, 'completed'),
+                'revenue' => $revenue,
+            ],
+            'unread' => Message::unreadCount((int) $user['id']),
+        ]);
     }
 
     /**
@@ -62,6 +123,7 @@ final class DashboardController extends Controller
             'revenue' => Booking::revenueForGuide((int) $user['id']),
             'guideStats' => Booking::guideRatingStats((int) $user['id']),
             'guideBadge' => guide_badge((int) $user['id']),
+            'earningsByMonth' => Booking::earningsPerMonth((int) $user['id'], 6),
             'unread' => Message::unreadCount((int) $user['id']),
         ]);
     }

@@ -12,11 +12,11 @@ import {
   StatusBar,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import FavoriteHeart from '../../components/FavoriteHeart';
 import { EmptyState, RatingPill, SectionHeader } from '../../components/ui';
 import { getSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
@@ -56,7 +56,6 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
   const [firstName, setFirstName] = useState('');
 
   const load = useCallback(async () => {
@@ -85,10 +84,14 @@ export default function HomeScreen() {
   }, [load]);
 
   const openListing = (slug: string) => router.push({ pathname: '/listing/[slug]', params: { slug } });
-  const openCategory = (slug: string) => router.push({ pathname: '/things-to-do', params: { category: slug } });
+  const openCategory = (slug: string) =>
+    // "Tour Guides" lists guide people, not listings — send it to the directory.
+    slug === 'tour-guides'
+      ? router.push('/guides')
+      : router.push({ pathname: '/things-to-do', params: { category: slug } });
   const openAttractions = () => router.push({ pathname: '/things-to-do', params: { featured: '1' } });
   const openExplore = () => router.push('/things-to-do');
-  const submitSearch = () => router.push({ pathname: '/things-to-do', params: { q: searchQuery } });
+  const openSearch = () => router.push('/search');
 
   type GridItem = { key: string; label: string; icon: string; bg: string; color: string; onPress: () => void };
 
@@ -139,7 +142,10 @@ export default function HomeScreen() {
           <Ionicons name="sparkles" size={11} color="#FFFFFF" />
           <Text style={styles.featuredTagText}>Featured</Text>
         </View>
-        <RatingPill rating={item.rating} count={item.review_count} />
+        <View style={styles.heroTopRight}>
+          <RatingPill rating={item.rating} count={item.review_count} />
+          <FavoriteHeart listingId={item.id} favorited={item.favorited} size={34} />
+        </View>
       </View>
       <View style={styles.heroBottom}>
         {item.area ? (
@@ -176,6 +182,7 @@ export default function HomeScreen() {
             <RatingPill rating={item.rating} count={item.review_count} compact />
           </View>
         ) : null}
+        <FavoriteHeart listingId={item.id} favorited={item.favorited} size={32} style={styles.placeHeart} />
       </View>
       <View style={styles.placeBody}>
         {item.area ? (
@@ -201,9 +208,7 @@ export default function HomeScreen() {
       shadow={shadow}
       t={t}
       firstName={firstName}
-      searchQuery={searchQuery}
-      setSearchQuery={setSearchQuery}
-      submitSearch={submitSearch}
+      openSearch={openSearch}
       featured={featured}
       renderHero={renderHero}
       openExplore={openExplore}
@@ -258,9 +263,7 @@ type HomeHeaderProps = {
   shadow: ReturnType<typeof useTheme>['shadow'];
   t: ReturnType<typeof usePreferences>['t'];
   firstName: string;
-  searchQuery: string;
-  setSearchQuery: (value: string) => void;
-  submitSearch: () => void;
+  openSearch: () => void;
   featured: ApiListing[];
   renderHero: ({ item }: { item: ApiListing }) => React.ReactElement;
   openExplore: () => void;
@@ -332,9 +335,7 @@ function HomeHeader({
   shadow,
   t,
   firstName,
-  searchQuery,
-  setSearchQuery,
-  submitSearch,
+  openSearch,
   featured,
   renderHero,
   openExplore,
@@ -363,21 +364,17 @@ function HomeHeader({
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }, shadow.sm]}>
+      <TouchableOpacity
+        style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }, shadow.sm]}
+        activeOpacity={0.8}
+        onPress={openSearch}
+      >
         <Ionicons name="search" size={19} color={colors.textMute} />
-        <TextInput
-          style={[styles.searchInput, { color: colors.text }]}
-          placeholder={t('search_ph')}
-          placeholderTextColor={colors.textMute}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          returnKeyType="search"
-          onSubmitEditing={submitSearch}
-        />
-        <TouchableOpacity onPress={submitSearch} style={[styles.searchGo, { backgroundColor: colors.primary }]} activeOpacity={0.85}>
+        <Text style={[styles.searchInput, { color: colors.textMute }]} numberOfLines={1}>{t('search_ph')}</Text>
+        <View style={[styles.searchGo, { backgroundColor: colors.primary }]}>
           <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
-        </TouchableOpacity>
-      </View>
+        </View>
+      </TouchableOpacity>
 
       {featured.length > 0 ? (
         <View style={styles.featuredSection}>
@@ -430,6 +427,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  heroTopRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   featuredTag: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -457,6 +455,7 @@ const styles = StyleSheet.create({
   placeImageWrap: { width: '100%', height: CARD_WIDTH * 0.82 },
   placeImage: { width: '100%', height: '100%', resizeMode: 'cover', backgroundColor: '#00000011' },
   placeRating: { position: 'absolute', top: 8, left: 8 },
+  placeHeart: { position: 'absolute', top: 8, right: 8 },
   placeBody: { padding: 10 },
   placeAreaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3 },
   placeArea: { fontSize: 11, fontWeight: '600', marginLeft: 3, flex: 1 },

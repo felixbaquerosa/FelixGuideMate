@@ -85,10 +85,56 @@ SQL,
     'ALTER TABLE bookings ADD COLUMN promo_code_id INT UNSIGNED DEFAULT NULL',
     'ALTER TABLE bookings ADD COLUMN discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00',
     'ALTER TABLE bookings ADD COLUMN reminder_sent TINYINT(1) NOT NULL DEFAULT 0',
+    // Start time of the experience, so a listing can be booked per date + time slot.
+    'ALTER TABLE bookings ADD COLUMN booking_time VARCHAR(5) DEFAULT NULL',
     'ALTER TABLE listings ADD COLUMN sale_price DECIMAL(10,2) DEFAULT NULL',
     'ALTER TABLE listings ADD COLUMN sale_ends_at DATE DEFAULT NULL',
+    // Rental Partner + Hotel Partner provider roles (self-registerable dashboards).
+    "ALTER TABLE users MODIFY COLUMN role ENUM('admin','guide','tourist','rental_admin','hotel_admin') NOT NULL DEFAULT 'tourist'",
     'ALTER TABLE users ADD COLUMN admin_totp_secret VARCHAR(64) DEFAULT NULL',
     'ALTER TABLE users ADD COLUMN admin_totp_enabled TINYINT(1) NOT NULL DEFAULT 0',
+    // Presence for the mobile chat (updated on every authenticated API request).
+    'ALTER TABLE users ADD COLUMN last_seen_at TIMESTAMP NULL DEFAULT NULL',
+    // Detected original language of a chat message (ISO-639-1), filled lazily.
+    'ALTER TABLE messages ADD COLUMN source_lang VARCHAR(8) DEFAULT NULL',
+    // Cache of auto-translated chat messages so we only call the provider once.
+    <<<'SQL'
+CREATE TABLE IF NOT EXISTS `message_translations` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `message_id` INT UNSIGNED NOT NULL,
+    `target_lang` VARCHAR(8) NOT NULL,
+    `body` TEXT NOT NULL,
+    `source_lang` VARCHAR(8) DEFAULT NULL,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `message_translations_unique` (`message_id`, `target_lang`),
+    CONSTRAINT `message_translations_message_fk` FOREIGN KEY (`message_id`) REFERENCES `messages` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL,
+    // ── Rentals: online (full-payment) reservation, held ID, and refunds ──
+    // Full up-front payment recorded against the reservation.
+    "ALTER TABLE rental_requests ADD COLUMN payment_status ENUM('unpaid','paid','refunded') NOT NULL DEFAULT 'unpaid'",
+    'ALTER TABLE rental_requests ADD COLUMN payment_method VARCHAR(40) DEFAULT NULL',
+    'ALTER TABLE rental_requests ADD COLUMN payment_reference VARCHAR(80) DEFAULT NULL',
+    'ALTER TABLE rental_requests ADD COLUMN paid_at TIMESTAMP NULL DEFAULT NULL',
+    // Valid ID / important details, held for the rental owner until the unit is returned.
+    'ALTER TABLE rental_requests ADD COLUMN id_document VARCHAR(255) DEFAULT NULL',
+    'ALTER TABLE rental_requests ADD COLUMN id_type VARCHAR(80) DEFAULT NULL',
+    'ALTER TABLE rental_requests ADD COLUMN id_number VARCHAR(120) DEFAULT NULL',
+    // A single tourist-filed problem report per reservation, with refund tracking.
+    'ALTER TABLE rental_requests ADD COLUMN report_type VARCHAR(40) DEFAULT NULL',
+    'ALTER TABLE rental_requests ADD COLUMN report_message VARCHAR(1000) DEFAULT NULL',
+    "ALTER TABLE rental_requests ADD COLUMN report_status ENUM('none','open','refunded','rejected') NOT NULL DEFAULT 'none'",
+    'ALTER TABLE rental_requests ADD COLUMN report_created_at TIMESTAMP NULL DEFAULT NULL',
+    'ALTER TABLE rental_requests ADD COLUMN owner_report_note VARCHAR(500) DEFAULT NULL',
+    // Allow a refunded state on the reservation lifecycle.
+    "ALTER TABLE rental_requests MODIFY COLUMN status ENUM('pending','approved','contacted','cancelled','completed','refunded') NOT NULL DEFAULT 'pending'",
+    // ── Social sign-in (Google / Facebook), stored anonymously ──
+    // We keep only the provider + an opaque provider user id. The real email
+    // and password are NEVER stored, so admins can never see them.
+    "ALTER TABLE users ADD COLUMN oauth_provider VARCHAR(20) DEFAULT NULL",
+    'ALTER TABLE users ADD COLUMN oauth_id VARCHAR(191) DEFAULT NULL',
+    'ALTER TABLE users ADD UNIQUE KEY users_oauth_unique (oauth_provider, oauth_id)',
 ];
 
 foreach ($statements as $sql) {

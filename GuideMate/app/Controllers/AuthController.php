@@ -64,7 +64,7 @@ final class AuthController extends Controller
         $this->view('auth/register', [
             'title' => 'Sign up',
             'errors' => errors(),
-            'role' => $this->input('role', 'tourist'),
+            'role' => $this->input('role', 'guide'),
         ], 'auth');
     }
 
@@ -75,7 +75,10 @@ final class AuthController extends Controller
         $email = (string) $this->input('email', '');
         $password = (string) $this->input('password', '');
         $confirm = (string) $this->input('password_confirm', '');
-        $role = $this->input('role', 'tourist') === 'guide' ? 'guide' : 'tourist';
+        // The web portal is for service providers only (tourists use the mobile
+        // app). Accept the three provider roles; anything else defaults to guide.
+        $requestedRole = (string) $this->input('role', 'guide');
+        $role = User::isProviderRole($requestedRole) ? $requestedRole : 'guide';
 
         $errors = $this->requireFields(['name', 'email', 'password']);
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -91,8 +94,9 @@ final class AuthController extends Controller
             $errors['password_confirm'] = 'Passwords do not match.';
         }
 
-        // Guides must submit verification documents up front.
-        if ($role === 'guide') {
+        // Providers (guides, rental & hotel partners) submit verification
+        // documents up front so an admin can review them.
+        if (User::isProviderRole($role)) {
             $errors += $this->guideDocErrors();
         }
 
@@ -106,7 +110,7 @@ final class AuthController extends Controller
 
         $id = User::create($name, $email, $password, $role);
 
-        if ($role === 'guide') {
+        if (User::isProviderRole($role)) {
             try {
                 $this->storeGuideDocs($id);
             } catch (RuntimeException $e) {
@@ -125,8 +129,9 @@ final class AuthController extends Controller
 
         NotificationService::welcome($email, explode(' ', $name)[0]);
 
-        if ($role === 'guide') {
-            flash('success', 'Thanks, ' . explode(' ', $name)[0] . '! Your guide application and documents were submitted and are now pending admin review.');
+        if (User::isProviderRole($role)) {
+            $roleLabel = User::PROVIDER_LABELS[$role] ?? 'provider';
+            flash('success', 'Thanks, ' . explode(' ', $name)[0] . '! Your ' . strtolower($roleLabel) . ' application and documents were submitted and are now pending admin review.');
         } else {
             flash('success', 'Welcome to GuideMate, ' . explode(' ', $name)[0] . '!');
         }

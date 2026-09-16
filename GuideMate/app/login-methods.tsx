@@ -12,8 +12,9 @@ import {
     View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getSession } from '../lib/authStore';
+import { getSession, loginWithBackendOAuth, loginWithSocial } from '../lib/authStore';
 import { canUseBiometrics, isBiometricEnabled } from '../lib/biometric';
+import { isProviderConfigured, SocialProvider } from '../lib/socialAuth';
 
 export default function LoginMethodsScreen() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export default function LoginMethodsScreen() {
   const [email, setEmail] = useState('');
   const [bioEnabled, setBioEnabled] = useState(false);
   const [bioSupported, setBioSupported] = useState(true);
+  const [socialBusy, setSocialBusy] = useState<SocialProvider | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -45,6 +47,29 @@ export default function LoginMethodsScreen() {
     accent: '#22C55E',
     iconBg: isDark ? '#15161A' : '#F1F5F9',
     soon: isDark ? '#3A3D48' : '#E5E7EB',
+  };
+
+  const handleSocial = async (provider: SocialProvider) => {
+    if (socialBusy) return;
+    setSocialBusy(provider);
+    try {
+      const session =
+        isProviderConfigured(provider)
+          ? await loginWithBackendOAuth(provider)
+          : await loginWithSocial(provider);
+      setLoggedIn(true);
+      setEmail(session.email);
+      Alert.alert(
+        'Signed in',
+        `You're now signed in with ${provider === 'google' ? 'Google' : 'Facebook'}. Your email stays private — it's never shared with GuideMate.`,
+        [{ text: 'Continue', onPress: () => router.replace('/(tabs)') }]
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Sign-in failed. Please try again.';
+      if (!/cancel/i.test(msg)) Alert.alert('Could not sign in', msg);
+    } finally {
+      setSocialBusy(null);
+    }
   };
 
   const requireLogin = (action: () => void) => {
@@ -118,8 +143,9 @@ export default function LoginMethodsScreen() {
           icon="mail-outline"
           title="Email & password"
           subtitle={loggedIn && email ? email : 'Sign in with your email address'}
-          status="Active"
-          statusColor={theme.accent}
+          status={loggedIn ? 'Active' : 'Not signed in'}
+          statusColor={loggedIn ? theme.accent : theme.textSub}
+          onPress={loggedIn ? undefined : () => requireLogin(() => {})}
         />
 
         <Method
@@ -133,16 +159,30 @@ export default function LoginMethodsScreen() {
           icon="finger-print"
           title="Fingerprint / biometrics"
           subtitle={bioSupported ? 'Sign in quickly with your fingerprint' : 'Not available on this device'}
-          status={!bioSupported ? undefined : bioEnabled ? 'Enabled' : 'Set up'}
-          statusColor={bioEnabled ? theme.accent : undefined}
+          status={!bioSupported ? undefined : loggedIn && bioEnabled ? 'Enabled' : 'Set up'}
+          statusColor={loggedIn && bioEnabled ? theme.accent : undefined}
           disabled={!bioSupported}
           onPress={() => requireLogin(() => router.push('/fingerprint'))}
         />
 
-        <Text style={[styles.sectionLabel, { color: theme.textSub }]}>Coming soon</Text>
+        <Text style={[styles.sectionLabel, { color: theme.textSub }]}>Sign in with</Text>
 
-        <Method icon="logo-google" title="Continue with Google" subtitle="Link your Google account" status="Soon" disabled />
-        <Method icon="logo-facebook" title="Continue with Facebook" subtitle="Link your Facebook account" status="Soon" disabled />
+        <Method
+          icon="logo-google"
+          title="Continue with Google"
+          subtitle="Private — your email is never shared"
+          status={socialBusy === 'google' ? '…' : undefined}
+          onPress={() => handleSocial('google')}
+          disabled={!!socialBusy}
+        />
+        <Method
+          icon="logo-facebook"
+          title="Continue with Facebook"
+          subtitle="Private — your email is never shared"
+          status={socialBusy === 'facebook' ? '…' : undefined}
+          onPress={() => handleSocial('facebook')}
+          disabled={!!socialBusy}
+        />
 
         {!loggedIn ? (
           <TouchableOpacity
