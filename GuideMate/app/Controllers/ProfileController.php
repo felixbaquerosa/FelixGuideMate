@@ -7,6 +7,7 @@ namespace App\Controllers;
 use App\Core\Auth;
 use App\Core\Controller;
 use App\Core\Upload;
+use App\Models\GuideDocument;
 use App\Models\User;
 use RuntimeException;
 
@@ -14,9 +15,17 @@ final class ProfileController extends Controller
 {
     public function edit(): void
     {
+        $user = Auth::user();
+        // Providers (guides, rental & hotel partners) review their admin-verified
+        // documents right here on Profile — the Verification menu item was removed.
+        $documents = User::isProviderRole((string) ($user['role'] ?? ''))
+            ? GuideDocument::forUser((int) $user['id'])
+            : [];
+
         $this->view('profile/edit', [
             'title' => 'My Profile',
-            'user' => Auth::user(),
+            'user' => $user,
+            'documents' => $documents,
             'errors' => errors(),
         ]);
     }

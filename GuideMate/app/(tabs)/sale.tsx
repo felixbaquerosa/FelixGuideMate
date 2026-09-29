@@ -1,33 +1,98 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Chip, ScreenTitle } from '../../components/ui';
+import { getSession } from '../../lib/authStore';
 import { useTheme } from '../../lib/theme';
 import { VOUCHERS, formatVoucherMinimum } from '../../lib/vouchers';
+import { ApiVoucher, getVouchers } from '../../services/api';
 
 const LOCATIONS = ['Philippines'];
+
+type SaleVoucher = {
+  code: string;
+  label: string;
+  description: string;
+  minSpend: number;
+  expires: string;
+  used: boolean;
+};
+
+function fromLocal(): SaleVoucher[] {
+  return VOUCHERS.map((promo) => ({
+    code: promo.code,
+    label: promo.label,
+    description: promo.description,
+    minSpend: promo.minSpend,
+    expires: promo.expires,
+    used: false,
+  }));
+}
+
+function fromApi(rows: ApiVoucher[]): SaleVoucher[] {
+  return rows.map((promo) => ({
+    code: promo.code,
+    label: promo.label,
+    description: promo.description,
+    minSpend: promo.min_spend,
+    expires: promo.expires,
+    used: !!promo.used,
+  }));
+}
 
 export default function SaleScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors, isDark, radius, shadow, gradients } = useTheme();
   const [location, setLocation] = useState('Philippines');
+  const [promos, setPromos] = useState<SaleVoucher[]>(fromLocal());
 
-  const promos = location === 'Philippines' ? VOUCHERS : [];
+  const loadVouchers = useCallback(async () => {
+    try {
+      const data = await getVouchers();
+      if (Array.isArray(data.vouchers) && data.vouchers.length) {
+        setPromos(fromApi(data.vouchers));
+        return;
+      }
+    } catch {
+      // Keep the local catalog if the API is unreachable.
+    }
+    setPromos(fromLocal());
+  }, []);
 
-  const redeem = (promo: (typeof VOUCHERS)[number]) => {
+  useFocusEffect(
+    useCallback(() => {
+      loadVouchers();
+    }, [loadVouchers])
+  );
+
+  const redeem = async (promo: SaleVoucher) => {
+    if (promo.used) {
+      Alert.alert('Already used', 'This voucher was already redeemed on your account. Each voucher can only be used once.');
+      return;
+    }
+    const session = await getSession();
+    if (!session) {
+      Alert.alert('Sign in required', 'Sign in so this voucher can be saved to your account and used once at checkout.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign in', onPress: () => router.push('/(auth)/login') },
+      ]);
+      return;
+    }
     Alert.alert(
-      `Voucher ready`,
-      `Use code ${promo.code} at checkout. The discount will be applied automatically when you enter it.`,
+      'Voucher ready',
+      `Use code ${promo.code} at checkout. It can only be redeemed once on this account.`,
       [
         { text: 'Browse deals', onPress: () => router.push('/things-to-do') },
         { text: 'Got it', style: 'cancel' },
       ]
     );
   };
+
+  const visible = location === 'Philippines' ? promos : [];
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bgAlt }]} edges={['left', 'right']}>
@@ -39,7 +104,6 @@ export default function SaleScreen() {
       >
         <ScreenTitle title="Deals & Offers" subtitle="Save more on your next adventure" />
 
-        {/* Hero promo banner */}
         <LinearGradient
           colors={gradients.sunset}
           start={{ x: 0, y: 0 }}
@@ -57,7 +121,6 @@ export default function SaleScreen() {
           <Ionicons name="pricetags" size={74} color="rgba(255,255,255,0.25)" style={styles.bannerIcon} />
         </LinearGradient>
 
-        {/* Location filter */}
         <Text style={[styles.sectionLabel, { color: colors.text }]}>Destination</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipRow}>
           {LOCATIONS.map((loc) => (
@@ -65,33 +128,44 @@ export default function SaleScreen() {
           ))}
         </ScrollView>
 
-        {/* Promo cards */}
         <Text style={[styles.sectionLabel, { color: colors.text }]}>Promo codes for {location}</Text>
-        {promos.map((promo) => (
+        {visible.map((promo) => (
           <View
             key={promo.code}
-            style={[styles.promoCard, { backgroundColor: colors.card, borderColor: colors.border }, shadow.sm]}
+            style={[
+              styles.promoCard,
+              { backgroundColor: colors.card, borderColor: colors.border, opacity: promo.used ? 0.72 : 1 },
+              shadow.sm,
+            ]}
           >
             <View style={[styles.promoBadge, { backgroundColor: isDark ? colors.cardAlt : '#FFF1EC' }]}>
-              <Text style={[styles.promoBadgeText, { color: colors.accent }]}>{promo.label}</Text>
+              <Text style={[styles.promoBadgeText, { color: promo.used ? colors.textMute : colors.accent }]}>{promo.label}</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={[styles.promoDesc, { color: colors.text }]}>{promo.description}</Text>
               <Text style={[styles.promoMeta, { color: colors.textSub }]}>{formatVoucherMinimum(promo.minSpend)}</Text>
               <View style={styles.promoCodeRow}>
                 <View style={[styles.codePill, { backgroundColor: colors.chipBg, borderColor: colors.border }]}>
-                  <Ionicons name="pricetag" size={11} color={colors.primary} />
+                  <Ionicons name="pricetag" size={11} color={promo.used ? colors.textMute : colors.primary} />
                   <Text style={[styles.codeText, { color: colors.text }]}>{promo.code}</Text>
                 </View>
-                <Text style={[styles.expires, { color: colors.textMute }]}>{promo.expires}</Text>
+                <Text style={[styles.expires, { color: colors.textMute }]}>
+                  {promo.used ? 'Already used' : promo.expires}
+                </Text>
               </View>
             </View>
             <TouchableOpacity
-              style={[styles.redeemBtn, { backgroundColor: colors.primary, borderRadius: radius.pill }]}
-              activeOpacity={0.85}
+              style={[
+                styles.redeemBtn,
+                { backgroundColor: promo.used ? colors.border : colors.primary, borderRadius: radius.pill },
+              ]}
+              activeOpacity={promo.used ? 1 : 0.85}
               onPress={() => redeem(promo)}
+              disabled={promo.used}
             >
-              <Text style={styles.redeemText}>Redeem</Text>
+              <Text style={[styles.redeemText, promo.used && { color: colors.textMute }]}>
+                {promo.used ? 'Used' : 'Redeem'}
+              </Text>
             </TouchableOpacity>
           </View>
         ))}

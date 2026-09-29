@@ -2,8 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
-    FlatList,
-    Modal,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -16,24 +14,15 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Alert } from 'react-native';
 import { getSession, logout } from '../lib/authStore';
 import { isBiometricEnabled } from '../lib/biometric';
-import {
-    CURRENCY_LIST,
-    CurrencyCode,
-    LANGUAGES,
-    LanguageCode,
-    usePreferences,
-} from '../lib/preferences';
-
-type Picker = 'language' | 'currency' | null;
+import { LANGUAGES, usePreferences } from '../lib/preferences';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const { language, currency, setLanguage, setCurrency, t } = usePreferences();
+  const { language, t } = usePreferences();
   const insets = useSafeAreaInsets();
 
-  const [picker, setPicker] = useState<Picker>(null);
   const [fingerprintOn, setFingerprintOn] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
 
@@ -76,7 +65,7 @@ export default function SettingsScreen() {
 
   const handleLogout = async () => {
     await logout();
-    router.replace('/(auth)/login');
+    router.replace({ pathname: '/(auth)/login', params: { loggedOut: '1' } });
   };
 
   const Row = ({
@@ -103,7 +92,7 @@ export default function SettingsScreen() {
       <View style={styles.rowRight}>
         {showDot ? <View style={[styles.dot, { backgroundColor: theme.warn }]} /> : null}
         {value ? <Text style={[styles.rowValue, { color: valueColor ?? theme.textSub }]}>{value}</Text> : null}
-        <Ionicons name="chevron-forward" size={18} color={theme.chevron} />
+        {onPress ? <Ionicons name="chevron-forward" size={18} color={theme.chevron} /> : null}
       </View>
     </TouchableOpacity>
   );
@@ -141,8 +130,8 @@ export default function SettingsScreen() {
 
         <SectionLabel text={t('sec_prefs')} />
         <View style={[styles.group, { backgroundColor: theme.card }]}>
-          <Row label={t('language')} value={currentLanguageLabel} first onPress={() => setPicker('language')} />
-          <Row label={t('currency')} value={currency} onPress={() => setPicker('currency')} />
+          <Row label={t('language')} value={currentLanguageLabel} first />
+          <Row label={t('currency')} value="PHP" />
           <Row label={t('notifications')} onPress={() => router.push('/notification-settings')} />
         </View>
 
@@ -158,90 +147,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
-
-      {/* Language picker */}
-      <PickerModal
-        visible={picker === 'language'}
-        title={t('choose_language')}
-        onClose={() => setPicker(null)}
-        theme={theme}
-        data={LANGUAGES.map((l) => ({ key: l.code, label: l.label, selected: l.code === language }))}
-        onSelect={(key) => {
-          setLanguage(key as LanguageCode);
-          setPicker(null);
-        }}
-      />
-
-      {/* Currency picker */}
-      <PickerModal
-        visible={picker === 'currency'}
-        title={t('choose_currency')}
-        onClose={() => setPicker(null)}
-        theme={theme}
-        data={CURRENCY_LIST.map((c) => ({
-          key: c.code,
-          label: `${c.code} \u00B7 ${c.name}`,
-          right: c.symbol,
-          selected: c.code === currency,
-        }))}
-        onSelect={(key) => {
-          setCurrency(key as CurrencyCode);
-          setPicker(null);
-        }}
-      />
     </SafeAreaView>
-  );
-}
-
-type PickerItem = { key: string; label: string; right?: string; selected: boolean };
-
-function PickerModal({
-  visible,
-  title,
-  onClose,
-  onSelect,
-  data,
-  theme,
-}: {
-  visible: boolean;
-  title: string;
-  onClose: () => void;
-  onSelect: (key: string) => void;
-  data: PickerItem[];
-  theme: any;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <TouchableOpacity style={styles.modalDismiss} activeOpacity={1} onPress={onClose} />
-        <View style={[styles.modalSheet, { backgroundColor: theme.card }]}>
-          <View style={styles.modalHeader}>
-            <Text style={[styles.modalTitle, { color: theme.textMain }]}>{title}</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={24} color={theme.textSub} />
-            </TouchableOpacity>
-          </View>
-          <FlatList
-            data={data}
-            keyExtractor={(item) => item.key}
-            style={{ maxHeight: 380 }}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[styles.option, { borderTopColor: theme.border }]}
-                activeOpacity={0.6}
-                onPress={() => onSelect(item.key)}
-              >
-                <Text style={[styles.optionLabel, { color: theme.textMain }]}>{item.label}</Text>
-                <View style={styles.rowRight}>
-                  {item.right ? <Text style={[styles.optionRight, { color: theme.textSub }]}>{item.right}</Text> : null}
-                  {item.selected ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
-                </View>
-              </TouchableOpacity>
-            )}
-          />
-        </View>
-      </View>
-    </Modal>
   );
 }
 
@@ -271,25 +177,4 @@ const styles = StyleSheet.create({
   rowRight: { flexDirection: 'row', alignItems: 'center' },
   rowValue: { fontSize: 15, marginRight: 6 },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  modalDismiss: { flex: 1 },
-  modalSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 30 },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 18,
-  },
-  modalTitle: { fontSize: 17, fontWeight: '700' },
-  option: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  optionLabel: { fontSize: 16, fontWeight: '500' },
-  optionRight: { fontSize: 15, marginRight: 10 },
 });

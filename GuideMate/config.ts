@@ -60,9 +60,7 @@ export const SOCIAL_AUTH = {
   facebookAppId: '',
 
   // Expo Go-compatible Google/Facebook login is mediated by your PHP backend.
-  // Because the providers require a PUBLIC https redirect, set this to your
-  // tunnel URL (e.g. https://xxxx.trycloudflare.com/GuideMate/public). When
-  // empty, the LAN API_BASE_URL is used (fine on web, but the providers won't
-  // redirect to a LAN IP).
-  backendPublicUrl: '',
+  // Google now uses a localhost callback inside the in-app WebView (no ngrok).
+  // Facebook still needs this public https origin when configured.
+  backendPublicUrl: 'https://concinnous-unobliging-max.ngrok-free.dev/GuideMate/public',
 };

@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
 import { useTheme } from '../../lib/theme';
 import {
@@ -54,6 +55,7 @@ export default function ChatScreen() {
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [isTourist, setIsTourist] = useState(true);
 
   // Auto-translate the guide's replies into the reader's app language.
   const [autoTranslate, setAutoTranslate] = useState(true);
@@ -101,6 +103,12 @@ export default function ChatScreen() {
       // transient — try again next tick
     }
   }, [partnerId, translateLang, scrollToEnd]);
+
+  useEffect(() => {
+    getSession().then((session) => {
+      setIsTourist((session?.role ?? 'tourist') === 'tourist');
+    });
+  }, []);
 
   useEffect(() => {
     loadInitial();
@@ -210,12 +218,16 @@ export default function ChatScreen() {
         >
           <Ionicons name="language" size={21} color={autoTranslate ? colors.primary : colors.textMute} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => router.push(`/call/${partnerId}?video=0&name=${encodeURIComponent(partner?.name ?? '')}`)}>
-          <Ionicons name="call" size={21} color={colors.primary} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => router.push(`/call/${partnerId}?video=1&name=${encodeURIComponent(partner?.name ?? '')}`)}>
-          <Ionicons name="videocam" size={23} color={colors.primary} />
-        </TouchableOpacity>
+        {!isTourist ? (
+          <>
+            <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => router.push(`/call/${partnerId}?video=0&name=${encodeURIComponent(partner?.name ?? '')}`)}>
+              <Ionicons name="call" size={21} color={colors.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7} onPress={() => router.push(`/call/${partnerId}?video=1&name=${encodeURIComponent(partner?.name ?? '')}`)}>
+              <Ionicons name="videocam" size={23} color={colors.primary} />
+            </TouchableOpacity>
+          </>
+        ) : null}
       </View>
 
       {loading ? (

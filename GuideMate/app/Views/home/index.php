@@ -7,7 +7,7 @@
  * @var array<int,array<string,mixed>> $recentReviews
  * @var array<int,int> $favIds
  */
-$icons = ['things-to-do' => '🧭', 'tour-guides' => '🧑', 'hotels' => '🏨', 'restaurants' => '🍽️'];
+$icons = ['things-to-do' => '🧭', 'tour-guides' => '🧑', 'hotels' => '🏨'];
 $heroVideo = $heroVideo ?? [];
 $heroPoster = (string) ($heroVideo['poster'] ?? '');
 $hero4k = (string) ($heroVideo['video_4k'] ?? '');
@@ -31,13 +31,13 @@ $heroHd = (string) ($heroVideo['video_hd'] ?? $hero4k);
     <div class="container hero-content">
         <span class="hero-eyebrow">🌴 Discover the Queen City of the South</span>
         <h1>Explore the best of <span class="accent">Cebu</span>, one mate at a time.</h1>
-        <p class="hero-sub">Find top-rated tours, trusted local guides, comfy stays and must-try restaurants — all across Cebu, Philippines.</p>
+        <p class="hero-sub">Find top-rated tours, trusted local guides and comfy stays — all across Cebu, Philippines.</p>
 
         <form class="search-bar" action="<?= e(url('/listings')) ?>" method="get">
             <div class="field">
                 <div style="flex:1;">
                     <label>What are you looking for?</label>
-                    <input type="text" name="q" placeholder="e.g. canyoneering, lechon, island hopping">
+                    <input type="text" name="q" placeholder="e.g. canyoneering, island hopping, whale sharks">
                 </div>
             </div>
             <div class="field">

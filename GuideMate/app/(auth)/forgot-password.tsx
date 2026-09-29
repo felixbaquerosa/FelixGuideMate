@@ -9,7 +9,6 @@ import {
     KeyboardAvoidingView,
     Linking,
     Platform,
-    SafeAreaView,
     StatusBar,
     StyleSheet,
     Text,
@@ -18,6 +17,7 @@ import {
     useColorScheme,
     View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { apiForgotPassword } from '../../services/api';
 
 const { height } = Dimensions.get('window');

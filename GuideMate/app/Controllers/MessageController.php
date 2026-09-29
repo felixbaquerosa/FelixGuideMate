@@ -188,6 +188,32 @@ final class MessageController extends Controller
         }
 
         Message::send($userId, $guideId, $body, (int) $listing['id']);
+        $labels = host_labels((string) ($listing['owner_role'] ?? ''));
+        flash('success', $labels['flash']);
+        redirect('/messages/' . $guideId);
+    }
+
+    public function contactGuideProfile(string $id): void
+    {
+        $this->verifyCsrf();
+        $guide = User::find((int) $id);
+        if ($guide === null || ($guide['role'] ?? '') !== 'guide' || ($guide['guide_status'] ?? '') !== 'approved') {
+            abort(404, 'Guide not found.');
+        }
+
+        $userId = (int) Auth::id();
+        $guideId = (int) $guide['id'];
+        if ($guideId === $userId) {
+            flash('info', 'This is your own profile.');
+            redirect('/tour-guides');
+        }
+
+        $body = trim((string) $this->input('body', ''));
+        if ($body === '') {
+            $body = 'Hi! I would like to book a tour with you. Are you available?';
+        }
+
+        Message::send($userId, $guideId, $body);
         flash('success', 'Message sent to the guide.');
         redirect('/messages/' . $guideId);
     }

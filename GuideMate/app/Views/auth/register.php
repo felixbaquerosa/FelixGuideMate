@@ -18,8 +18,10 @@ $providerLabels = User::PROVIDER_LABELS;
 <h1 class="a-rise" style="animation-delay:.12s;">Create your account</h1>
 <p class="auth-switch a-rise" style="animation-delay:.18s;">Already have one? <a href="<?= e(url('/login')) ?>">Log in</a></p>
 
-<form method="post" action="<?= e(url('/register')) ?>" enctype="multipart/form-data" novalidate>
+<form id="registerForm" method="post" action="<?= e(url('/register')) ?>" enctype="multipart/form-data" novalidate>
     <?= csrf_field() ?>
+
+    <div id="formError" class="form-alert a-rise" role="alert" style="display:none;animation-delay:.2s;"></div>
 
     <div class="field-row a-rise" style="animation-delay:.24s;">
         <label for="role">I want to join as</label>
@@ -123,11 +125,74 @@ $providerLabels = User::PROVIDER_LABELS;
     var hints = {
         guide: 'Lead tours and manage your own experience listings and bookings.',
         rental_admin: 'List rental vehicles and handle incoming rental requests.',
-        hotel_admin: 'List your hotel / accommodation and manage guest bookings.'
+        hotel_admin: 'List your hotel / accommodation and reply to guest inquiries.'
     };
     var select = document.getElementById('role');
     var hint = document.getElementById('roleHint');
     function sync() { if (select && hint) { hint.textContent = hints[select.value] || ''; } }
     if (select) { select.addEventListener('change', sync); sync(); }
+
+    // Client-side "fill everything" guard. The form uses novalidate so the
+    // browser stays quiet; we show one clear message and highlight what's
+    // missing. The server still re-validates as the source of truth.
+    var form = document.getElementById('registerForm');
+    var box = document.getElementById('formError');
+    if (form && box) {
+        // name -> label pairs of the required fields on this page.
+        var required = [
+            { id: 'name', label: 'Full name' },
+            { id: 'email', label: 'Email' },
+            { id: 'password', label: 'Password' },
+            { id: 'password_confirm', label: 'Confirm password' },
+            { id: 'valid_id', label: 'Valid government ID' },
+            { id: 'credential', label: 'Credential document' }
+        ];
+
+        function isEmpty(el) {
+            if (!el) { return false; }
+            if (el.type === 'file') { return !el.files || el.files.length === 0; }
+            return String(el.value || '').trim() === '';
+        }
+        function mark(el, bad) {
+            if (!el) { return; }
+            var wrap = el.closest('.input-wrap') || el;
+            wrap.style.outline = bad ? '2px solid #EF4444' : '';
+            wrap.style.borderRadius = bad ? '10px' : '';
+        }
+
+        // Clear a field's highlight as soon as the user fixes it.
+        required.forEach(function (f) {
+            var el = document.getElementById(f.id);
+            if (el) {
+                var evt = el.type === 'file' ? 'change' : 'input';
+                el.addEventListener(evt, function () { mark(el, false); });
+            }
+        });
+        var terms = form.querySelector('input[name="accept_terms"]');
+        if (terms) { terms.addEventListener('change', function () { terms.style.outline = ''; }); }
+
+        form.addEventListener('submit', function (e) {
+            var missing = [];
+            required.forEach(function (f) {
+                var el = document.getElementById(f.id);
+                var empty = isEmpty(el);
+                mark(el, empty);
+                if (empty) { missing.push(el); }
+            });
+            var termsUnchecked = terms && !terms.checked;
+            if (terms) { terms.style.outline = termsUnchecked ? '2px solid #EF4444' : ''; }
+
+            if (missing.length > 0 || termsUnchecked) {
+                e.preventDefault();
+                box.textContent = 'Please fill up all of the form above, and try again.';
+                box.style.display = 'block';
+                var first = missing[0] || terms;
+                if (first) {
+                    box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    try { first.focus({ preventScroll: true }); } catch (err) { first.focus(); }
+                }
+            }
+        });
+    }
 })();
 </script>

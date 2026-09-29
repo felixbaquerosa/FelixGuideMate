@@ -12,7 +12,15 @@ export default function TabsLayout() {
   const { t } = usePreferences();
   const { colors, shadow } = useTheme();
 
-  const bottomInset = insets.bottom;
+  const isAndroid = Platform.OS === 'android';
+
+  // The Android on-screen navigation bar is hidden (immersive mode set in the
+  // root layout), so we don't reserve its inset — that leaves a dark strip
+  // under the icons. On Android we use a compact bar with no bottom padding so
+  // the icons sit right at the bottom edge. On iOS we honour the home-indicator
+  // inset so the icons clear the home bar.
+  const bottomPad = isAndroid ? 0 : insets.bottom;
+  const barHeight = isAndroid ? 56 : 58 + insets.bottom;
 
   const haptic = () => Haptics.selectionAsync().catch(() => {});
 
@@ -22,21 +30,20 @@ export default function TabsLayout() {
       screenOptions={{
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMute,
+        // Icons only — labels hidden for a cleaner, self-explanatory tab bar.
+        tabBarShowLabel: false,
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopWidth: 1,
           borderTopColor: colors.border,
-          height: 62 + bottomInset,
-          paddingBottom: 8 + bottomInset,
-          paddingTop: 8,
+          height: barHeight,
+          paddingBottom: bottomPad,
+          paddingTop: 0,
           ...(Platform.OS === 'ios' ? shadow.md : { elevation: 12 }),
         },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '700',
-        },
         tabBarItemStyle: {
-          paddingTop: 2,
+          justifyContent: 'center',
+          alignItems: 'center',
         },
         headerShown: false,
       }}

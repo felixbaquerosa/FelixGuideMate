@@ -41,7 +41,7 @@ final class Favorite
              JOIN listings l ON l.id = f.listing_id
              JOIN categories c ON c.id = l.category_id
              LEFT JOIN reviews r ON r.listing_id = l.id
-             WHERE f.user_id = ?
+             WHERE f.user_id = ? AND c.slug NOT IN ("restaurants")
              GROUP BY l.id
              ORDER BY f.created_at DESC',
             [$userId]

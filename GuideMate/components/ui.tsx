@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import {
   ActivityIndicator,
+  Animated,
   StyleSheet,
   Text,
   TextStyle,
@@ -266,6 +267,112 @@ export function ScreenTitle({ title, subtitle, right }: { title: string; subtitl
     </View>
   );
 }
+
+export function AppToast({
+  visible,
+  title,
+  subtitle,
+  onHide,
+  duration = 2400,
+  top = 12,
+}: {
+  visible: boolean;
+  title: string;
+  subtitle?: string;
+  onHide: () => void;
+  duration?: number;
+  top?: number;
+}) {
+  const { colors, radius, shadow, gradients, isDark } = useTheme();
+  const opacity = React.useRef(new Animated.Value(0)).current;
+  const translateY = React.useRef(new Animated.Value(-12)).current;
+  const onHideRef = React.useRef(onHide);
+  onHideRef.current = onHide;
+
+  React.useEffect(() => {
+    if (!visible) {
+      opacity.setValue(0);
+      translateY.setValue(-12);
+      return;
+    }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.timing(translateY, { toValue: 0, duration: 220, useNativeDriver: true }),
+    ]).start();
+    const hide = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(translateY, { toValue: -8, duration: 180, useNativeDriver: true }),
+      ]).start(({ finished }) => {
+        if (finished) onHideRef.current();
+      });
+    }, duration);
+    return () => clearTimeout(hide);
+  }, [visible, duration, opacity, translateY]);
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        toastStyles.wrap,
+        {
+          top,
+          opacity,
+          transform: [{ translateY }],
+        },
+      ]}
+    >
+      <View
+        style={[
+          toastStyles.card,
+          shadow.md,
+          {
+            backgroundColor: isDark ? '#1A2030' : '#FFFFFF',
+            borderColor: isDark ? 'rgba(52,211,153,0.28)' : 'rgba(15,169,104,0.22)',
+            borderRadius: radius.lg,
+          },
+        ]}
+      >
+        <LinearGradient colors={gradients.brand} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={toastStyles.icon}>
+          <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+        </LinearGradient>
+        <View style={{ flex: 1 }}>
+          <Text style={[toastStyles.title, { color: colors.text }]}>{title}</Text>
+          {subtitle ? <Text style={[toastStyles.sub, { color: colors.textSub }]}>{subtitle}</Text> : null}
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+const toastStyles = StyleSheet.create({
+  wrap: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    zIndex: 50,
+  },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+  },
+  icon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  title: { fontSize: 15, fontWeight: '800', letterSpacing: -0.2 },
+  sub: { fontSize: 12, fontWeight: '500', marginTop: 2, lineHeight: 16 },
+});
 
 const styles = StyleSheet.create({
   btnLabel: { fontSize: 15, fontWeight: '800', letterSpacing: 0.2 } as TextStyle,

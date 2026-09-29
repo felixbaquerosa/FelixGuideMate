@@ -135,6 +135,23 @@ SQL,
     "ALTER TABLE users ADD COLUMN oauth_provider VARCHAR(20) DEFAULT NULL",
     'ALTER TABLE users ADD COLUMN oauth_id VARCHAR(191) DEFAULT NULL',
     'ALTER TABLE users ADD UNIQUE KEY users_oauth_unique (oauth_provider, oauth_id)',
+    // ── Schedule list ──
+    // Guides plot the sessions they actually run (date + start time), instead of
+    // only blocking unavailable dates. Travelers can see when a tour is offered.
+    <<<'SQL'
+CREATE TABLE IF NOT EXISTS `listing_schedules` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `listing_id` INT UNSIGNED NOT NULL,
+    `schedule_date` DATE NOT NULL,
+    `start_time` VARCHAR(5) DEFAULT NULL,
+    `capacity` INT UNSIGNED DEFAULT NULL,
+    `note` VARCHAR(255) DEFAULT NULL,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `listing_schedules_listing_fk` (`listing_id`),
+    CONSTRAINT `listing_schedules_listing_fk` FOREIGN KEY (`listing_id`) REFERENCES `listings` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL,
 ];
 
 foreach ($statements as $sql) {

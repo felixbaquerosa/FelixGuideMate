@@ -17,7 +17,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AppButton } from '../../components/ui';
+import { AppButton, AppToast } from '../../components/ui';
 import { getSession, restoreSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
 import { useTheme } from '../../lib/theme';
@@ -37,6 +37,13 @@ export default function AccountScreen() {
   const [bioOpen, setBioOpen] = useState(false);
   const [bioDraft, setBioDraft] = useState('');
   const [savingBio, setSavingBio] = useState(false);
+  const [toast, setToast] = useState(false);
+  const [toastKey, setToastKey] = useState(0);
+
+  const showProfileUpdated = () => {
+    setToast(true);
+    setToastKey((n) => n + 1);
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -106,6 +113,7 @@ export default function AccountScreen() {
     try {
       const res = await apiUploadAvatar(result.assets[0].uri);
       setUser(res.user);
+      showProfileUpdated();
     } catch (e) {
       Alert.alert('Upload failed', e instanceof Error ? e.message : 'Please try again.');
     } finally {
@@ -124,6 +132,7 @@ export default function AccountScreen() {
       const res = await apiUpdateProfile({ bio: bioDraft.trim() });
       setUser(res.user);
       setBioOpen(false);
+      showProfileUpdated();
     } catch (e) {
       Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
     } finally {
@@ -253,6 +262,15 @@ export default function AccountScreen() {
           </View>
         </View>
       </Modal>
+
+      <AppToast
+        key={toastKey}
+        visible={toast}
+        title="Profile Updated"
+        subtitle="Your changes have been saved."
+        top={insets.top + 8}
+        onHide={() => setToast(false)}
+      />
     </SafeAreaView>
   );
 }

@@ -11,6 +11,8 @@ use App\Models\Favorite;
 use App\Models\Listing;
 use App\Models\Message;
 use App\Models\RentalRequest;
+use App\Models\Review;
+use App\Models\ReviewImage;
 use App\Models\User;
 
 final class DashboardController extends Controller
@@ -31,27 +33,56 @@ final class DashboardController extends Controller
     }
 
     /**
-     * Hotel Partner dashboard — mirrors the guide dashboard, but the partner's
-     * listings are hotels/accommodation. Reuses the owner-scoped listing and
-     * booking queries so the same tools work unchanged.
+     * All tourist reviews on this provider's listings (guides, hotel and
+     * rental partners).
+     */
+    public function reviews(): void
+    {
+        $user = Auth::user();
+        if ($user === null || !User::isProviderRole((string) ($user['role'] ?? ''))) {
+            abort(403, 'Service providers only.');
+        }
+
+        $reviews = Review::forOwner((int) $user['id']);
+        foreach ($reviews as &$review) {
+            $review['images'] = ReviewImage::forReview((int) $review['id']);
+        }
+        unset($review);
+
+        $stats = Booking::guideRatingStats((int) $user['id']);
+        $this->view('dashboard/reviews', [
+            'title' => 'Reviews',
+            'user' => $user,
+            'reviews' => $reviews,
+            'summary' => [
+                'avg' => (float) ($stats['avg_rating'] ?? 0),
+                'count' => (int) ($stats['review_count'] ?? 0),
+            ],
+        ]);
+    }
+
+    /**
+     * Hotel Partner dashboard — listings and guest inquiries only.
+     * Hotel stays are not bookable on GuideMate; tourists message the hotel.
      *
      * @param array<string, mixed> $user
      */
     private function hotelAdmin(array $user): void
     {
-        Booking::reconcileOrphanRefunds();
         Auth::refreshUser();
         $user = Auth::user() ?? $user;
+        $uid = (int) $user['id'];
+        $stats = Booking::guideRatingStats($uid);
         $this->view('dashboard/hotel', [
             'title' => 'Hotel Dashboard',
             'user' => $user,
-            'listings' => Listing::forOwner((int) $user['id']),
-            'recentBookings' => array_slice(Booking::forGuide((int) $user['id']), 0, 6),
-            'bookingCount' => Booking::countForGuide((int) $user['id']),
-            'revenue' => Booking::revenueForGuide((int) $user['id']),
-            'guideStats' => Booking::guideRatingStats((int) $user['id']),
-            'earningsByMonth' => Booking::earningsPerMonth((int) $user['id'], 6),
-            'unread' => Message::unreadCount((int) $user['id']),
+            'listings' => Listing::forOwner($uid),
+            'inquiries' => array_slice(Message::conversations($uid), 0, 6),
+            'unread' => Message::unreadCount($uid),
+            'reviewStats' => [
+                'avg_rating' => $stats['avg_rating'] ?? 0,
+                'review_count' => $stats['review_count'] ?? 0,
+            ],
         ]);
     }
 
@@ -84,6 +115,7 @@ final class DashboardController extends Controller
                 'completed' => $countBy($requests, 'completed'),
                 'revenue' => $revenue,
             ],
+            'guideStats' => Booking::guideRatingStats((int) $user['id']),
             'unread' => Message::unreadCount((int) $user['id']),
         ]);
     }

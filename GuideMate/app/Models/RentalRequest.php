@@ -27,7 +27,7 @@ final class RentalRequest
             'SELECT r.*, u.name AS user_name, u.email AS user_email
              FROM rental_requests r
              JOIN users u ON u.id = r.user_id
-             ORDER BY r.created_at DESC'
+             ORDER BY FIELD(r.status, "pending", "approved", "contacted", "completed", "cancelled", "refunded"), r.created_at DESC'
         );
     }
 
@@ -88,7 +88,7 @@ final class RentalRequest
                 (string) ($data['customer_email'] ?? ''),
                 (string) ($data['customer_phone'] ?? ''),
                 (string) ($data['notes'] ?? ''),
-                $paid ? 'approved' : 'pending',
+                'pending',
                 $paid ? 'paid' : 'unpaid',
                 $paid ? (string) ($data['payment_method'] ?? 'card') : null,
                 $paid ? (string) ($data['payment_reference'] ?? '') : null,
@@ -167,7 +167,7 @@ final class RentalRequest
     public static function statusLabel(string $status): string
     {
         return match ($status) {
-            'pending' => 'Pending',
+            'pending' => 'Awaiting confirmation',
             'approved' => 'Approved',
             'contacted' => 'Contacted',
             'cancelled' => 'Cancelled',

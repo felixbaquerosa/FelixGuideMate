@@ -3,10 +3,12 @@
  * @var array<string,mixed> $user
  * @var array<int,array<string,mixed>> $requests
  * @var array<string,mixed> $stats
+ * @var array<string,mixed> $guideStats
  * @var int $unread
  */
 $status = (string) ($user['guide_status'] ?? 'none');
 $isVerified = $status === 'approved';
+$guideStats = $guideStats ?? [];
 ?>
 <div class="container">
     <div class="dash-layout">
@@ -45,6 +47,16 @@ $isVerified = $status === 'approved';
                 <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('clock', 18) ?></span><div class="label">Pending</div><div class="value"><?= (int) ($stats['pending'] ?? 0) ?></div></div>
                 <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('check-circle', 18) ?></span><div class="label">Active / approved</div><div class="value"><?= (int) ($stats['approved'] ?? 0) ?></div></div>
                 <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('revenue', 18) ?></span><div class="label">Revenue</div><div class="value" style="font-size:1.4rem;"><?= money((float) ($stats['revenue'] ?? 0)) ?></div></div>
+            </div>
+
+            <div class="stat-grid" style="margin-top:1rem;">
+                <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('star', 18) ?></span><div class="label">Avg rating</div><div class="value"><?= e((string) ($guideStats['avg_rating'] ?? 0)) ?></div></div>
+                <a href="<?= e(url('/dashboard/reviews')) ?>" class="stat stat-ico-card stat-clickable">
+                    <span class="stat-ico"><?= admin_icon('feedback', 18) ?></span>
+                    <div class="label">Reviews</div>
+                    <div class="value"><?= (int) ($guideStats['review_count'] ?? 0) ?></div>
+                    <div class="stat-action">See comments →</div>
+                </a>
             </div>
 
             <div class="panel">

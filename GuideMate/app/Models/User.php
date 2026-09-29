@@ -245,6 +245,15 @@ final class User
         return $row !== null && (int) ($row['guide_warned'] ?? 0) === 1;
     }
 
+    public static function countWarnedProviders(): int
+    {
+        $row = Database::first(
+            'SELECT COUNT(*) AS c FROM users
+             WHERE role IN ("guide","rental_admin","hotel_admin") AND guide_warned = 1'
+        );
+        return (int) ($row['c'] ?? 0);
+    }
+
     /** @return string Verified|TopRated|Elite|'' */
     public static function guideBadge(int $guideId): string
     {

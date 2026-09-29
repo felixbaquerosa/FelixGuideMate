@@ -17,6 +17,8 @@ $router->post('/api/auth/register', [ApiController::class, 'register']);
 $router->post('/api/auth/social', [ApiController::class, 'socialAuth']);
 $router->get('/api/auth/google/start', [ApiController::class, 'googleStart']);
 $router->get('/api/auth/google/callback', [ApiController::class, 'googleCallback']);
+$router->get('/api/auth/google/pending', [ApiController::class, 'googlePending']);
+$router->post('/api/auth/google/exchange', [ApiController::class, 'googleExchange']);
 $router->get('/api/auth/facebook/start', [ApiController::class, 'facebookStart']);
 $router->get('/api/auth/facebook/callback', [ApiController::class, 'facebookCallback']);
 $router->post('/api/auth/forgot-password', [ApiController::class, 'forgotPassword']);
@@ -31,6 +33,9 @@ $router->post('/api/profile/avatar', [ApiController::class, 'uploadAvatar']);
 $router->get('/api/bookings', [ApiController::class, 'bookings']);
 $router->post('/api/bookings', [ApiController::class, 'createBooking']);
 $router->get('/api/trip-map', [ApiController::class, 'tripMap']);
+$router->get('/api/maps', [ApiController::class, 'mapsConfig']);
+$router->get('/api/vouchers', [ApiController::class, 'vouchers']);
+$router->post('/api/vouchers/validate', [ApiController::class, 'validateVoucher']);
 
 $router->get('/api/favorites', [ApiController::class, 'favorites']);
 $router->post('/api/favorites/toggle', [ApiController::class, 'toggleFavorite']);

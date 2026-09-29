@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Core\Controller;
 use App\Models\RentalRequest;
+use App\Services\NotificationService;
 
 /**
  * Rental Partner dashboard — manages incoming vehicle rental requests.
@@ -30,9 +31,41 @@ final class RentalController extends Controller
             flash('error', 'Invalid rental status.');
             redirect('/dashboard/rentals');
         }
+        $rental = RentalRequest::find((int) $id);
+        if ($rental === null) {
+            flash('error', 'Rental request not found.');
+            redirect('/dashboard/rentals');
+        }
+
         $note = trim((string) $this->input('admin_note', ''));
+        $paid = ($rental['payment_status'] ?? 'unpaid') === 'paid';
+        $customerEmail = (string) ($rental['customer_email'] ?? '');
+        $vehicleName = (string) ($rental['vehicle_name'] ?? 'your rental');
+        $pickupDate = (string) ($rental['pickup_date'] ?? '');
+
+        if ($status === 'cancelled' && $paid) {
+            RentalRequest::refund((int) $id, $note !== '' ? $note : null);
+            if ($customerEmail !== '') {
+                NotificationService::rentalDeclined(
+                    $customerEmail,
+                    $vehicleName,
+                    'Your payment has been refunded.'
+                );
+            }
+            flash('success', 'Reservation declined and the tourist has been refunded.');
+            redirect('/dashboard/rentals');
+        }
+
         RentalRequest::updateStatus((int) $id, $status, $note !== '' ? $note : null);
-        flash('success', 'Rental request updated.');
+        if ($status === 'approved' && $customerEmail !== '') {
+            NotificationService::rentalConfirmed($customerEmail, $vehicleName, $pickupDate);
+            flash('success', 'Rental confirmed. The tourist has been notified.');
+        } elseif ($status === 'cancelled' && $customerEmail !== '') {
+            NotificationService::rentalDeclined($customerEmail, $vehicleName);
+            flash('success', 'Reservation declined.');
+        } else {
+            flash('success', 'Rental request updated.');
+        }
         redirect('/dashboard/rentals');
     }
 

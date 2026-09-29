@@ -408,4 +408,16 @@
             keepPlaying();
         }
     }
+
+    document.querySelectorAll('form.js-unrestrict').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            var name = form.getAttribute('data-name') || 'this partner';
+            var ok = window.confirm(
+                'Unrestrict ' + name + '?\n\nConfirm that this partner is not harming tourists. Booking actions (Confirm, Complete, Cancel) will be restored.'
+            );
+            if (!ok) {
+                e.preventDefault();
+            }
+        });
+    });
 })();

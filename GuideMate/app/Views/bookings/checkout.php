@@ -4,7 +4,7 @@ $paid = $payment && $payment['status'] === 'paid';
 $errors = errors();
 ?>
 <section class="page-head">
-    <div class="container"><h1>Checkout</h1><p>Securely confirm your booking.</p></div>
+    <div class="container"><h1>Checkout</h1><p>Pay now. The partner still needs to confirm your booking afterwards.</p></div>
 </section>
 <section class="section">
     <div class="container" style="max-width:880px;">

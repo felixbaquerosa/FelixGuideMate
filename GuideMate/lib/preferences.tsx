@@ -11,40 +11,6 @@ type CurrencyInfo = { code: string; symbol: string; name: string; rate: number; 
 
 const CURRENCY_DATA: CurrencyInfo[] = [
   { code: 'PHP', symbol: '\u20B1', name: 'Philippine Peso', rate: 1, decimals: 0 },
-  { code: 'USD', symbol: '$', name: 'US Dollar', rate: 56, decimals: 2 },
-  { code: 'EUR', symbol: '\u20AC', name: 'Euro', rate: 60.5, decimals: 2 },
-  { code: 'GBP', symbol: '\u00A3', name: 'British Pound', rate: 71, decimals: 2 },
-  { code: 'JPY', symbol: '\u00A5', name: 'Japanese Yen', rate: 0.375, decimals: 0 },
-  { code: 'CNY', symbol: '\u00A5', name: 'Chinese Yuan', rate: 7.7, decimals: 2 },
-  { code: 'KRW', symbol: '\u20A9', name: 'South Korean Won', rate: 0.042, decimals: 0 },
-  { code: 'HKD', symbol: 'HK$', name: 'Hong Kong Dollar', rate: 7.17, decimals: 2 },
-  { code: 'TWD', symbol: 'NT$', name: 'New Taiwan Dollar', rate: 1.74, decimals: 0 },
-  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar', rate: 41.4, decimals: 2 },
-  { code: 'MYR', symbol: 'RM', name: 'Malaysian Ringgit', rate: 11.8, decimals: 2 },
-  { code: 'THB', symbol: '\u0E3F', name: 'Thai Baht', rate: 1.57, decimals: 0 },
-  { code: 'IDR', symbol: 'Rp', name: 'Indonesian Rupiah', rate: 0.0035, decimals: 0 },
-  { code: 'VND', symbol: '\u20AB', name: 'Vietnamese Dong', rate: 0.0022, decimals: 0 },
-  { code: 'INR', symbol: '\u20B9', name: 'Indian Rupee', rate: 0.672, decimals: 0 },
-  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', rate: 37, decimals: 2 },
-  { code: 'NZD', symbol: 'NZ$', name: 'New Zealand Dollar', rate: 34, decimals: 2 },
-  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', rate: 41, decimals: 2 },
-  { code: 'CHF', symbol: 'CHF ', name: 'Swiss Franc', rate: 62.7, decimals: 2 },
-  { code: 'SEK', symbol: 'kr', name: 'Swedish Krona', rate: 5.3, decimals: 2 },
-  { code: 'NOK', symbol: 'kr', name: 'Norwegian Krone', rate: 5.2, decimals: 2 },
-  { code: 'DKK', symbol: 'kr', name: 'Danish Krone', rate: 8.1, decimals: 2 },
-  { code: 'RUB', symbol: '\u20BD', name: 'Russian Ruble', rate: 0.62, decimals: 2 },
-  { code: 'AED', symbol: 'AED ', name: 'UAE Dirham', rate: 15.2, decimals: 2 },
-  { code: 'SAR', symbol: 'SAR ', name: 'Saudi Riyal', rate: 14.9, decimals: 2 },
-  { code: 'QAR', symbol: 'QAR ', name: 'Qatari Riyal', rate: 15.4, decimals: 2 },
-  { code: 'BRL', symbol: 'R$', name: 'Brazilian Real', rate: 11.2, decimals: 2 },
-  { code: 'MXN', symbol: 'MX$', name: 'Mexican Peso', rate: 3.25, decimals: 2 },
-  { code: 'ZAR', symbol: 'R', name: 'South African Rand', rate: 3.0, decimals: 2 },
-  { code: 'TRY', symbol: '\u20BA', name: 'Turkish Lira', rate: 1.74, decimals: 2 },
-  { code: 'PLN', symbol: 'z\u0142', name: 'Polish Zloty', rate: 14, decimals: 2 },
-  { code: 'CZK', symbol: 'K\u010D', name: 'Czech Koruna', rate: 2.4, decimals: 2 },
-  { code: 'HUF', symbol: 'Ft', name: 'Hungarian Forint', rate: 0.157, decimals: 0 },
-  { code: 'ILS', symbol: '\u20AA', name: 'Israeli Shekel', rate: 15.1, decimals: 2 },
-  { code: 'EGP', symbol: 'E\u00A3', name: 'Egyptian Pound', rate: 1.18, decimals: 2 },
 ];
 
 export const CURRENCIES: Record<string, CurrencyInfo> = Object.fromEntries(
@@ -59,24 +25,6 @@ export type LanguageCode = string;
 
 export const LANGUAGES: { code: string; label: string; locale: string }[] = [
   { code: 'en', label: 'English (US)', locale: 'en-US' },
-  { code: 'es', label: 'Espa\u00F1ol', locale: 'es-ES' },
-  { code: 'fr', label: 'Fran\u00E7ais', locale: 'fr-FR' },
-  { code: 'de', label: 'Deutsch', locale: 'de-DE' },
-  { code: 'it', label: 'Italiano', locale: 'it-IT' },
-  { code: 'pt', label: 'Portugu\u00EAs', locale: 'pt-BR' },
-  { code: 'nl', label: 'Nederlands', locale: 'nl-NL' },
-  { code: 'ru', label: '\u0420\u0443\u0441\u0441\u043A\u0438\u0439', locale: 'ru-RU' },
-  { code: 'tr', label: 'T\u00FCrk\u00E7e', locale: 'tr-TR' },
-  { code: 'ar', label: '\u0627\u0644\u0639\u0631\u0628\u064A\u0629', locale: 'ar-SA' },
-  { code: 'hi', label: '\u0939\u093F\u0928\u094D\u0926\u0940', locale: 'hi-IN' },
-  { code: 'id', label: 'Bahasa Indonesia', locale: 'id-ID' },
-  { code: 'th', label: '\u0E44\u0E17\u0E22', locale: 'th-TH' },
-  { code: 'vi', label: 'Ti\u1EBFng Vi\u1EC7t', locale: 'vi-VN' },
-  { code: 'fil', label: 'Filipino', locale: 'fil-PH' },
-  { code: 'zh', label: '\u4E2D\u6587 (\u7B80\u4F53)', locale: 'zh-CN' },
-  { code: 'zh-Hant', label: '\u4E2D\u6587 (\u7E41\u9AD4)', locale: 'zh-TW' },
-  { code: 'ja', label: '\u65E5\u672C\u8A9E', locale: 'ja-JP' },
-  { code: 'ko', label: '\uD55C\uAD6D\uC5B4', locale: 'ko-KR' },
 ];
 
 type Dict = Record<string, string>;
@@ -388,11 +336,15 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
           AsyncStorage.getItem(LANG_KEY),
           AsyncStorage.getItem(CUR_KEY),
         ]);
-        if (lang && lang in TRANSLATIONS) {
-          setLanguageState(lang);
+        const allowedLang = lang && LANGUAGES.some((l) => l.code === lang) ? lang : 'en';
+        const allowedCur = cur && cur in CURRENCIES ? cur : 'PHP';
+        setLanguageState(allowedLang);
+        setCurrencyState(allowedCur);
+        if (lang !== allowedLang) {
+          AsyncStorage.setItem(LANG_KEY, allowedLang).catch(() => {});
         }
-        if (cur && cur in CURRENCIES) {
-          setCurrencyState(cur);
+        if (cur !== allowedCur) {
+          AsyncStorage.setItem(CUR_KEY, allowedCur).catch(() => {});
         }
       } catch {
         // ignore

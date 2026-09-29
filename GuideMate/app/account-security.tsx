@@ -4,7 +4,6 @@ import React, { useState } from 'react';
 import {
     Alert,
     Modal,
-    SafeAreaView,
     StatusBar,
     StyleSheet,
     Text,
@@ -13,7 +12,7 @@ import {
     useColorScheme,
     View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { deleteAccount } from '../lib/authStore';
 
 export default function AccountSecurityScreen() {

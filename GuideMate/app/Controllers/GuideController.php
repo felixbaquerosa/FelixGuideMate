@@ -13,6 +13,7 @@ use App\Models\Category;
 use App\Models\GuideAvailability;
 use App\Models\GuideDocument;
 use App\Models\Listing;
+use App\Models\ListingSchedule;
 use App\Models\User;
 use App\Services\NotificationService;
 use RuntimeException;
@@ -23,9 +24,14 @@ final class GuideController extends Controller
 
     public function listings(): void
     {
+        $user = Auth::user();
         $this->view('guide/listings', [
             'title' => 'My Listings',
             'listings' => Listing::forOwner((int) Auth::id()),
+            // For the inline "Add New Listing" pop-up modal.
+            'categories' => Category::publicAll(),
+            'canCreate' => (string) ($user['guide_status'] ?? 'none') === 'approved',
+            'errors' => errors(),
         ]);
     }
 
@@ -35,7 +41,7 @@ final class GuideController extends Controller
         $this->view('guide/form', [
             'title' => 'Create Listing',
             'listing' => null,
-            'categories' => Category::all(),
+            'categories' => Category::publicAll(),
             'errors' => errors(),
         ]);
     }
@@ -83,7 +89,7 @@ final class GuideController extends Controller
         $this->view('guide/form', [
             'title' => 'Edit Listing',
             'listing' => $listing,
-            'categories' => Category::all(),
+            'categories' => Category::publicAll(),
             'errors' => errors(),
         ]);
     }
@@ -134,8 +140,17 @@ final class GuideController extends Controller
     public function verification(): void
     {
         $user = Auth::user();
+        // Title reflects the provider's role so a rental/hotel partner doesn't
+        // see "Guide verification".
+        $headings = [
+            'guide' => 'Guide verification',
+            'hotel_admin' => 'Hotel partner verification',
+            'rental_admin' => 'Rental partner verification',
+        ];
+        $heading = $headings[(string) ($user['role'] ?? '')] ?? 'Account verification';
         $this->view('guide/verification', [
-            'title' => 'Guide verification',
+            'title' => $heading,
+            'heading' => $heading,
             'user' => $user,
             'documents' => GuideDocument::forUser((int) $user['id']),
             'errors' => errors(),
@@ -187,8 +202,21 @@ final class GuideController extends Controller
         redirect('/dashboard/verification');
     }
 
+    /**
+     * Hotel partners list stays for discovery and reply to inquiries.
+     * Paid booking, schedule, and availability tools are for tour guides only.
+     */
+    private function rejectHotelPaidTools(): void
+    {
+        if (Auth::hasRole('hotel_admin')) {
+            flash('info', 'Hotel listings are inquire-only. Guests message you instead of booking.');
+            redirect('/dashboard');
+        }
+    }
+
     public function bookings(): void
     {
+        $this->rejectHotelPaidTools();
         Booking::reconcileOrphanRefunds();
         Auth::refreshUser();
         $user = Auth::user();
@@ -202,6 +230,7 @@ final class GuideController extends Controller
 
     public function updateBookingStatus(string $id): void
     {
+        $this->rejectHotelPaidTools();
         $this->verifyCsrf();
         Auth::refreshUser();
         if (User::isGuideWarned((int) Auth::id())) {
@@ -244,8 +273,22 @@ final class GuideController extends Controller
                 flash('error', 'This booking can no longer be updated.');
                 redirect('/dashboard/bookings');
             }
+            if ($status === 'completed' && $current !== 'confirmed') {
+                flash('error', 'Confirm this booking first before marking it completed.');
+                redirect('/dashboard/bookings');
+            }
             Booking::updateStatus((int) $booking['id'], $status);
-            flash('success', 'Booking marked as ' . $status . '.');
+            if ($status === 'confirmed') {
+                Booking::ensureVerifyToken((int) $booking['id']);
+                NotificationService::bookingConfirmed(
+                    (string) $booking['customer_email'],
+                    (string) $booking['listing_title'],
+                    (string) $booking['booking_date']
+                );
+                flash('success', 'Booking confirmed. The tourist has been notified.');
+            } else {
+                flash('success', 'Booking marked as completed.');
+            }
         }
 
         redirect('/dashboard/bookings');
@@ -253,11 +296,34 @@ final class GuideController extends Controller
 
     public function showVerifyBooking(): void
     {
+        $this->rejectHotelPaidTools();
         $this->view('guide/verify', ['title' => 'Verify booking', 'errors' => errors()]);
+    }
+
+    /**
+     * Transactions list — bookings + payments for this provider's listings,
+     * including transactions made from the mobile app.
+     */
+    public function transactions(): void
+    {
+        $this->rejectHotelPaidTools();
+        $rows = Booking::transactionsForGuide((int) Auth::id());
+        $paidTotal = 0.0;
+        foreach ($rows as $r) {
+            if (($r['payment_status'] ?? '') === 'paid') {
+                $paidTotal += (float) ($r['paid_amount'] ?? 0);
+            }
+        }
+        $this->view('guide/transactions', [
+            'title' => 'Transactions',
+            'transactions' => $rows,
+            'paidTotal' => $paidTotal,
+        ]);
     }
 
     public function verifyBooking(): void
     {
+        $this->rejectHotelPaidTools();
         $this->verifyCsrf();
         $token = trim((string) $this->input('verify_token', ''));
         if ($token === '') {
@@ -273,6 +339,7 @@ final class GuideController extends Controller
 
     public function availability(string $id): void
     {
+        $this->rejectHotelPaidTools();
         $listing = $this->ownedListing((int) $id);
         $this->view('guide/availability', [
             'title' => 'Availability',
@@ -283,6 +350,7 @@ final class GuideController extends Controller
 
     public function blockDate(string $id): void
     {
+        $this->rejectHotelPaidTools();
         $this->verifyCsrf();
         $listing = $this->ownedListing((int) $id);
         $date = (string) $this->input('blocked_date', '');
@@ -297,11 +365,57 @@ final class GuideController extends Controller
 
     public function unblockDate(string $id): void
     {
+        $this->rejectHotelPaidTools();
         $this->verifyCsrf();
         $listing = $this->ownedListing((int) $id);
         GuideAvailability::unblock((int) $listing['id'], (string) $this->input('blocked_date', ''));
         flash('info', 'Date unblocked.');
         redirect('/dashboard/listings/' . $listing['id'] . '/availability');
+    }
+
+    /** Schedule list — plot the sessions this listing actually runs. */
+    public function schedule(string $id): void
+    {
+        $this->rejectHotelPaidTools();
+        $listing = $this->ownedListing((int) $id);
+        $this->view('guide/schedule', [
+            'title' => 'Schedule',
+            'listing' => $listing,
+            'schedule' => ListingSchedule::forListing((int) $listing['id']),
+        ]);
+    }
+
+    public function addSchedule(string $id): void
+    {
+        $this->rejectHotelPaidTools();
+        $this->verifyCsrf();
+        $listing = $this->ownedListing((int) $id);
+        $date = (string) $this->input('schedule_date', '');
+        if ($date === '' || strtotime($date) === false) {
+            flash('error', 'Choose a valid date for your schedule.');
+            redirect('/dashboard/listings/' . $listing['id'] . '/schedule');
+        }
+        $capacityRaw = trim((string) $this->input('capacity', ''));
+        $capacity = $capacityRaw !== '' ? max(0, (int) $capacityRaw) : null;
+        ListingSchedule::add(
+            (int) $listing['id'],
+            $date,
+            (string) $this->input('start_time', ''),
+            $capacity,
+            (string) $this->input('note', '')
+        );
+        flash('success', 'Schedule added.');
+        redirect('/dashboard/listings/' . $listing['id'] . '/schedule');
+    }
+
+    public function removeSchedule(string $id): void
+    {
+        $this->rejectHotelPaidTools();
+        $this->verifyCsrf();
+        $listing = $this->ownedListing((int) $id);
+        ListingSchedule::remove((int) $listing['id'], (int) $this->input('schedule_id', 0));
+        flash('info', 'Schedule entry removed.');
+        redirect('/dashboard/listings/' . $listing['id'] . '/schedule');
     }
 
     /**
@@ -313,7 +427,8 @@ final class GuideController extends Controller
     {
         $errors = $this->requireFields(['title', 'description', 'area', 'price']);
         $categoryId = (int) $this->input('category_id', 0);
-        if (Category::find($categoryId) === null) {
+        $category = Category::find($categoryId);
+        if ($category === null || Category::isHiddenSlug((string) ($category['slug'] ?? ''))) {
             $errors['category_id'] = 'Please choose a category.';
         }
         $price = (float) $this->input('price', 0);
@@ -326,7 +441,9 @@ final class GuideController extends Controller
         }
 
         if ($errors !== []) {
-            $back = $this->input('listing_id') ? '/dashboard/listings/' . $this->input('listing_id') . '/edit' : '/dashboard/listings/create';
+            // New listings use the pop-up modal on the My Listings page, so send
+            // errors there; edits still go back to the full edit page.
+            $back = $this->input('listing_id') ? '/dashboard/listings/' . $this->input('listing_id') . '/edit' : '/dashboard/listings';
             flash_keep_old($errors, $_POST, $back);
         }
 
@@ -360,7 +477,7 @@ final class GuideController extends Controller
         } catch (RuntimeException $e) {
             $back = $this->input('listing_id')
                 ? '/dashboard/listings/' . $this->input('listing_id') . '/edit'
-                : '/dashboard/listings/create';
+                : '/dashboard/listings';
             flash_keep_old(['cover_file' => $e->getMessage()], $_POST, $back);
         }
         return null;

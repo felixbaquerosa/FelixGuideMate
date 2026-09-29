@@ -81,9 +81,11 @@ $router->post('/messages/{partner}/archive', [MessageController::class, 'archive
 $router->post('/messages/{partner}/unarchive', [MessageController::class, 'unarchive'], ['auth']);
 $router->post('/messages/{partner}/delete', [MessageController::class, 'deleteConversation'], ['auth']);
 $router->post('/listing/{id}/contact', [MessageController::class, 'contactGuide'], ['auth']);
+$router->post('/guides/{id}/contact', [MessageController::class, 'contactGuideProfile'], ['auth']);
 
 // ---- Dashboard (all roles) ------------------------------------------------
 $router->get('/dashboard', [DashboardController::class, 'index'], ['auth']);
+$router->get('/dashboard/reviews', [DashboardController::class, 'reviews'], ['provider']);
 
 // ---- Provider verification (guides, rental & hotel partners) --------------
 $router->get('/dashboard/verification', [GuideController::class, 'verification'], ['provider']);
@@ -99,10 +101,14 @@ $router->post('/dashboard/listings/{id}/delete', [GuideController::class, 'destr
 $router->get('/dashboard/bookings', [GuideController::class, 'bookings'], ['listing_provider']);
 $router->get('/dashboard/bookings/verify', [GuideController::class, 'showVerifyBooking'], ['listing_provider']);
 $router->post('/dashboard/bookings/verify', [GuideController::class, 'verifyBooking'], ['listing_provider']);
+$router->get('/dashboard/transactions', [GuideController::class, 'transactions'], ['listing_provider']);
 $router->post('/dashboard/bookings/{id}/status', [GuideController::class, 'updateBookingStatus'], ['listing_provider']);
 $router->get('/dashboard/listings/{id}/availability', [GuideController::class, 'availability'], ['listing_provider']);
 $router->post('/dashboard/listings/{id}/availability/block', [GuideController::class, 'blockDate'], ['listing_provider']);
 $router->post('/dashboard/listings/{id}/availability/unblock', [GuideController::class, 'unblockDate'], ['listing_provider']);
+$router->get('/dashboard/listings/{id}/schedule', [GuideController::class, 'schedule'], ['listing_provider']);
+$router->post('/dashboard/listings/{id}/schedule/add', [GuideController::class, 'addSchedule'], ['listing_provider']);
+$router->post('/dashboard/listings/{id}/schedule/remove', [GuideController::class, 'removeSchedule'], ['listing_provider']);
 
 // ---- Rental partner management (relocated from the admin portal) -----------
 $router->get('/dashboard/rentals', [RentalController::class, 'requests'], ['rental_admin']);
@@ -121,6 +127,9 @@ $router->get('/admin', [AdminController::class, 'index'], ['admin']);
 $router->get('/admin/feedback', [AdminController::class, 'feedback'], ['admin']);
 $router->post('/admin/feedback/{id}/status', [AdminController::class, 'updateFeedbackStatus'], ['admin']);
 $router->get('/admin/analytics', [AdminController::class, 'analytics'], ['admin']);
+$router->get('/admin/messages', [AdminController::class, 'messages'], ['admin']);
+$router->post('/admin/messages/send', [AdminController::class, 'sendMessage'], ['admin']);
+$router->get('/admin/messages/{partner}', [AdminController::class, 'messageThread'], ['admin']);
 $router->get('/admin/export/bookings', [AdminController::class, 'exportBookings'], ['admin']);
 $router->get('/admin/export/users', [AdminController::class, 'exportUsers'], ['admin']);
 $router->get('/admin/export/disputes', [AdminController::class, 'exportDisputes'], ['admin']);

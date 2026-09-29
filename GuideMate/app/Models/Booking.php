@@ -70,6 +70,14 @@ final class Booking
         );
     }
 
+    public static function attachPromo(int $id, int $promoId, float $discount): void
+    {
+        Database::run(
+            'UPDATE bookings SET promo_code_id = ?, discount_amount = ? WHERE id = ?',
+            [$promoId, $discount, $id]
+        );
+    }
+
     /**
      * @return array<string, mixed>|null
      */
@@ -207,7 +215,7 @@ final class Booking
             'SELECT b.id FROM bookings b
              JOIN payments p ON p.booking_id = b.id AND p.status = "paid"
              WHERE b.listing_id = ? AND b.user_id = ?
-               AND b.status IN ("confirmed", "completed")',
+               AND b.status IN ("pending", "confirmed", "completed")',
             [$listingId, $userId]
         ) !== null;
     }
@@ -226,7 +234,35 @@ final class Booking
              JOIN listings l ON l.id = b.listing_id
              JOIN users u ON u.id = b.user_id
              LEFT JOIN payments p ON p.booking_id = b.id
-             WHERE l.user_id = ? ORDER BY b.created_at DESC',
+             WHERE l.user_id = ?
+             ORDER BY FIELD(b.status, "pending", "confirmed", "completed", "disputed", "cancelled", "refunded"), b.created_at DESC',
+            [$guideId]
+        );
+    }
+
+    /**
+     * Transactions for a provider's listings — every booking with its payment
+     * details. Bookings placed from the mobile app land in the same `bookings`
+     * / `payments` tables, so they show up here automatically ("connected").
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function transactionsForGuide(int $guideId): array
+    {
+        return Database::all(
+            'SELECT b.id, b.booking_date, b.booking_time, b.guests, b.status,
+                    b.total_amount, b.created_at,
+                    l.title AS listing_title, l.slug AS listing_slug,
+                    u.name AS customer_name,
+                    p.amount AS paid_amount, p.method AS payment_method,
+                    p.status AS payment_status, p.reference AS payment_reference,
+                    p.paid_at AS paid_at
+             FROM bookings b
+             JOIN listings l ON l.id = b.listing_id
+             JOIN users u ON u.id = b.user_id
+             LEFT JOIN payments p ON p.booking_id = b.id
+             WHERE l.user_id = ?
+             ORDER BY COALESCE(p.paid_at, b.created_at) DESC',
             [$guideId]
         );
     }
@@ -287,9 +323,9 @@ final class Booking
     }
 
     /**
-     * Is this listing already taken on the given date? A date counts as booked
-     * once a booking for it is confirmed or completed (i.e. paid). Cancelled and
-     * still-unpaid (pending) bookings do not hold the slot.
+     * Is this listing already taken on the given date? Paid and unpaid pending
+     * bookings hold the slot until the owner declines, so two tourists cannot
+     * pay for the same date. Cancelled and refunded bookings do not hold it.
      */
     public static function isDateBooked(int $listingId, string $date, ?int $excludeBookingId = null): bool
     {
@@ -297,7 +333,7 @@ final class Booking
             return true;
         }
         $sql = 'SELECT id FROM bookings
-                WHERE listing_id = ? AND booking_date = ? AND status IN ("confirmed","completed")';
+                WHERE listing_id = ? AND booking_date = ? AND status IN ("pending","confirmed","completed")';
         $params = [$listingId, $date];
         if ($excludeBookingId !== null) {
             $sql .= ' AND id <> ?';
@@ -316,7 +352,7 @@ final class Booking
     {
         $booked = array_map(static fn($r) => (string) $r['booking_date'], Database::all(
             'SELECT booking_date FROM bookings
-             WHERE listing_id = ? AND status IN ("confirmed","completed") AND booking_date >= CURDATE()
+             WHERE listing_id = ? AND status IN ("pending","confirmed","completed") AND booking_date >= CURDATE()
              ORDER BY booking_date',
             [$listingId]
         ));
@@ -335,7 +371,7 @@ final class Booking
     {
         $rows = Database::all(
             'SELECT booking_date, booking_time FROM bookings
-             WHERE listing_id = ? AND status IN ("confirmed","completed") AND booking_date >= CURDATE()',
+             WHERE listing_id = ? AND status IN ("pending","confirmed","completed") AND booking_date >= CURDATE()',
             [$listingId]
         );
 
@@ -382,7 +418,7 @@ final class Booking
         }
         $time = substr(trim($time), 0, 5);
         $sql = 'SELECT id FROM bookings
-                WHERE listing_id = ? AND booking_date = ? AND status IN ("confirmed","completed")
+                WHERE listing_id = ? AND booking_date = ? AND status IN ("pending","confirmed","completed")
                   AND (booking_time = ? OR booking_time IS NULL OR booking_time = "")';
         $params = [$listingId, $date, $time];
         if ($excludeBookingId !== null) {
@@ -406,7 +442,7 @@ final class Booking
             'SELECT b.booking_date, b.booking_time
              FROM bookings b
              JOIN listings l ON l.id = b.listing_id
-             WHERE l.user_id = ? AND b.status IN ("confirmed","completed") AND b.booking_date >= CURDATE()',
+             WHERE l.user_id = ? AND b.status IN ("pending","confirmed","completed") AND b.booking_date >= CURDATE()',
             [$guideId]
         );
 
@@ -458,7 +494,7 @@ final class Booking
         $time = substr(trim($time), 0, 5);
         $sql = 'SELECT b.id FROM bookings b
                 JOIN listings l ON l.id = b.listing_id
-                WHERE l.user_id = ? AND b.booking_date = ? AND b.status IN ("confirmed","completed")
+                WHERE l.user_id = ? AND b.booking_date = ? AND b.status IN ("pending","confirmed","completed")
                   AND (b.booking_time = ? OR b.booking_time IS NULL OR b.booking_time = "")';
         $params = [$guideId, $date, $time];
         if ($excludeBookingId !== null) {
@@ -485,7 +521,7 @@ final class Booking
         if (Database::first(
             'SELECT b.id FROM bookings b
              JOIN listings l ON l.id = b.listing_id
-             WHERE l.user_id = ? AND b.booking_date = ? AND b.status IN ("confirmed","completed")',
+             WHERE l.user_id = ? AND b.booking_date = ? AND b.status IN ("pending","confirmed","completed")',
             [$guideId, $date]
         ) !== null) {
             return true;

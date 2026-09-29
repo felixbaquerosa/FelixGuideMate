@@ -8,7 +8,7 @@
             <div class="section-head" style="margin-bottom:1rem;">
                 <div>
                     <h1 class="mb-0">Rental requests</h1>
-                    <p class="hint mb-0">Bookings that tourists submitted from the mobile app.</p>
+                    <p class="hint mb-0">Paid reservations stay awaiting confirmation until you confirm or decline them.</p>
                 </div>
             </div>
 
@@ -42,7 +42,7 @@
                                     $paymentStatus = (string) ($r['payment_status'] ?? 'unpaid');
                                     $reportStatus = (string) ($r['report_status'] ?? 'none');
                                 ?>
-                                <tr>
+                                <tr<?= (string) $r['status'] === 'pending' ? ' style="background:#FEF3C7;"' : '' ?>>
                                     <td><?= (int) $r['id'] ?></td>
                                     <td>
                                         <strong><?= e($r['vehicle_name']) ?></strong><br>
@@ -112,9 +112,14 @@
                                             <form method="post" action="<?= e(url('/dashboard/rentals/' . $r['id'] . '/status')) ?>" class="dispute-btns" style="margin-top:.5rem;">
                                                 <?= csrf_field() ?>
                                                 <input class="input" type="text" name="admin_note" placeholder="Note to yourself" value="<?= e((string) ($r['admin_note'] ?? '')) ?>">
-                                                <button class="btn btn-primary btn-sm" type="submit" name="status" value="contacted">Mark contacted</button>
-                                                <button class="btn btn-ghost btn-sm" type="submit" name="status" value="completed">Complete</button>
-                                                <button class="btn btn-ghost btn-sm" type="submit" name="status" value="cancelled">Cancel</button>
+                                                <?php if ((string) $r['status'] === 'pending'): ?>
+                                                    <button class="btn btn-primary btn-sm" type="submit" name="status" value="approved">Confirm booking</button>
+                                                    <button class="btn btn-ghost btn-sm" type="submit" name="status" value="cancelled">Decline</button>
+                                                <?php else: ?>
+                                                    <button class="btn btn-ghost btn-sm" type="submit" name="status" value="contacted">Mark contacted</button>
+                                                    <button class="btn btn-ghost btn-sm" type="submit" name="status" value="completed">Complete</button>
+                                                    <button class="btn btn-ghost btn-sm" type="submit" name="status" value="cancelled">Cancel</button>
+                                                <?php endif; ?>
                                             </form>
                                             <?php if ($paymentStatus === 'paid' && $r['status'] !== 'refunded'): ?>
                                                 <form method="post" action="<?= e(url('/dashboard/rentals/' . $r['id'] . '/refund')) ?>" style="margin-top:.35rem;">

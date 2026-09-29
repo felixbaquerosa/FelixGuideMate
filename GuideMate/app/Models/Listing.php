@@ -10,7 +10,7 @@ use App\Core\Geo;
 final class Listing
 {
     private const SELECT = 'SELECT l.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon,
-                u.name AS owner_name, u.avatar AS owner_avatar,
+                u.name AS owner_name, u.avatar AS owner_avatar, u.role AS owner_role,
                 COALESCE(AVG(r.rating), 0) AS avg_rating, COUNT(DISTINCT r.id) AS review_count
             FROM listings l
             JOIN categories c ON c.id = l.category_id
@@ -44,6 +44,12 @@ final class Listing
         if (!empty($filters['featured'])) {
             $where[] = 'l.is_featured = 1';
         }
+        if (Category::isHiddenSlug((string) ($filters['category'] ?? ''))) {
+            return [];
+        }
+        if (empty($filters['include_hidden'])) {
+            $where[] = 'c.slug NOT IN ("restaurants")';
+        }
 
         $sql = self::SELECT . ' WHERE ' . implode(' AND ', $where) . ' GROUP BY l.id';
 
@@ -68,6 +74,7 @@ final class Listing
     public static function featured(int $limit = 6): array
     {
         $sql = self::SELECT . ' WHERE l.status = "approved" AND l.is_featured = 1
+                AND c.slug NOT IN ("restaurants")
                 GROUP BY l.id ORDER BY avg_rating DESC LIMIT ' . (int) $limit;
         return Database::all($sql);
     }
@@ -241,6 +248,42 @@ final class Listing
     }
 
     /**
+     * Find the closest approved hotel to a coordinate. Returns the hotel row
+     * plus a `distance_km` value, or null when no hotel has coordinates.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function nearestHotel(float $lat, float $lng, int $excludeId = 0): ?array
+    {
+        $rows = Database::all(
+            'SELECT l.id, l.title, l.slug, l.area, l.address, l.cover_image,
+                    l.latitude, l.longitude, l.price, l.price_unit
+             FROM listings l
+             JOIN categories c ON c.id = l.category_id
+             WHERE l.status = "approved" AND c.slug = "hotels"
+               AND l.latitude IS NOT NULL AND l.longitude IS NOT NULL
+               AND l.id <> ?',
+            [$excludeId]
+        );
+
+        $best = null;
+        $bestDist = INF;
+        foreach ($rows as $row) {
+            $dist = Geo::distanceKm($lat, $lng, (float) $row['latitude'], (float) $row['longitude']);
+            if ($dist < $bestDist) {
+                $bestDist = $dist;
+                $best = $row;
+            }
+        }
+
+        if ($best === null) {
+            return null;
+        }
+        $best['distance_km'] = round($bestDist, 1);
+        return $best;
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     public static function byArea(string $area): array
@@ -250,7 +293,7 @@ final class Listing
                     (SELECT AVG(r.rating) FROM reviews r WHERE r.listing_id = l.id) AS avg_rating,
                     (SELECT COUNT(*) FROM reviews r WHERE r.listing_id = l.id) AS review_count
              FROM listings l JOIN categories c ON c.id = l.category_id
-             WHERE l.status = "approved" AND l.area LIKE ? ORDER BY l.is_featured DESC, l.created_at DESC',
+             WHERE l.status = "approved" AND c.slug NOT IN ("restaurants") AND l.area LIKE ? ORDER BY l.is_featured DESC, l.created_at DESC',
             ['%' . $area . '%']
         );
     }
@@ -282,11 +325,26 @@ final class Listing
     public static function count(?string $status = null): int
     {
         if ($status !== null) {
-            $row = Database::first('SELECT COUNT(*) AS c FROM listings WHERE status = ?', [$status]);
+            $row = Database::first(
+                'SELECT COUNT(*) AS c FROM listings l
+                 JOIN categories c ON c.id = l.category_id
+                 WHERE l.status = ? AND c.slug NOT IN ("restaurants")',
+                [$status]
+            );
         } else {
-            $row = Database::first('SELECT COUNT(*) AS c FROM listings');
+            $row = Database::first(
+                'SELECT COUNT(*) AS c FROM listings l
+                 JOIN categories c ON c.id = l.category_id
+                 WHERE c.slug NOT IN ("restaurants")'
+            );
         }
         return (int) ($row['c'] ?? 0);
+    }
+
+    /** Only tour-guide listings can be booked. Hotels and things-to-do are inquire-only. */
+    public static function isBookable(array $listing): bool
+    {
+        return ($listing['category_slug'] ?? '') === 'tour-guides';
     }
 
     /**

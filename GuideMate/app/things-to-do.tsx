@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, RefreshControl, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import FavoriteHeart from '../components/FavoriteHeart';
 import { EmptyState, RatingPill } from '../components/ui';
+import { isHiddenCategorySlug, isHiddenListing } from '../lib/catalog';
 import { usePreferences } from '../lib/preferences';
 import { useTheme } from '../lib/theme';
 import { ApiListing, getListings, resolveImage } from '../services/api';
@@ -12,19 +13,23 @@ import { ApiListing, getListings, resolveImage } from '../services/api';
 export default function ListingsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ category?: string; q?: string; featured?: string }>();
+  const categoryParam = params.category && !isHiddenCategorySlug(String(params.category))
+    ? String(params.category)
+    : undefined;
   const { t, formatPrice } = usePreferences();
   const { colors, isDark, shadow } = useTheme();
 
   const [listings, setListings] = useState<ApiListing[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
   const title = params.featured
     ? 'Attractions'
     : params.q
       ? `Results for "${params.q}"`
-      : params.category
-        ? params.category.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+      : categoryParam
+        ? categoryParam.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
         : 'Explore Cebu';
 
   const load = useCallback(async () => {
@@ -32,20 +37,26 @@ export default function ListingsScreen() {
     setError('');
     try {
       const query: Record<string, string> = {};
-      if (params.category) query.category = String(params.category);
+      if (categoryParam) query.category = categoryParam;
       if (params.q) query.q = String(params.q);
       if (params.featured) query.featured = String(params.featured);
       const data = await getListings(query);
-      setListings(data.listings);
+      setListings(data.listings.filter((item) => !isHiddenListing(item)));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load listings.');
     } finally {
       setLoading(false);
     }
-  }, [params.category, params.q, params.featured]);
+  }, [categoryParam, params.q, params.featured]);
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
   }, [load]);
 
   const renderItem = ({ item }: { item: ApiListing }) => (
@@ -65,6 +76,12 @@ export default function ListingsScreen() {
           <View style={styles.areaChip}>
             <Ionicons name="location-sharp" size={11} color="#FFFFFF" />
             <Text style={styles.areaChipText}>{item.area}</Text>
+          </View>
+        ) : null}
+        {item.is_new ? (
+          <View style={styles.newBadge}>
+            <Ionicons name="sparkles" size={10} color="#FFFFFF" />
+            <Text style={styles.newBadgeText}>NEW</Text>
           </View>
         ) : null}
         <FavoriteHeart listingId={item.id} favorited={item.favorited} style={styles.heart} />
@@ -113,6 +130,9 @@ export default function ListingsScreen() {
           keyExtractor={(item) => String(item.id)}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
+          }
           ListEmptyComponent={
             <EmptyState
               icon={error ? 'cloud-offline-outline' : 'search-outline'}
@@ -153,6 +173,13 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   areaChipText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  newBadge: {
+    position: 'absolute', bottom: 10, right: 10,
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#22C55E',
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999,
+  },
+  newBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
   cardBody: { padding: 14 },
   cardTitle: { fontSize: 17, fontWeight: '800', marginBottom: 5, letterSpacing: -0.3 },
   cardDesc: { fontSize: 13, lineHeight: 19, marginBottom: 10 },

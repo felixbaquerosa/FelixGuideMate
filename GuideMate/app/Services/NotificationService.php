@@ -27,9 +27,65 @@ final class NotificationService
         );
     }
 
+    public static function bookingAwaitingConfirmation(string $email, string $listingTitle, string $date): void
+    {
+        self::send(
+            $email,
+            'Payment received — waiting for confirmation',
+            "Your payment for {$listingTitle} on {$date} was received.\n\n"
+            . "The partner still needs to confirm this booking. You will get another message once they accept it.\n\n"
+            . 'Track it here: ' . self::appUrl('/bookings')
+        );
+    }
+
+    public static function bookingNeedsConfirmation(
+        string $email,
+        string $ownerName,
+        string $listingTitle,
+        string $customerName,
+        string $date
+    ): void {
+        self::send(
+            $email,
+            'Confirm this booking — ' . $listingTitle,
+            "Hi {$ownerName},\n\n"
+            . "{$customerName} booked \"{$listingTitle}\" on {$date} and has already paid.\n\n"
+            . "Please confirm or decline it in your dashboard:\n"
+            . self::appUrl('/dashboard/bookings')
+        );
+    }
+
     public static function bookingConfirmed(string $email, string $listingTitle, string $date): void
     {
         self::send($email, 'Booking confirmed — ' . $listingTitle, "Your booking for {$listingTitle} on {$date} is confirmed.\n\nView bookings: " . self::appUrl('/bookings'));
+    }
+
+    public static function rentalAwaitingConfirmation(string $email, string $vehicleName, string $pickupDate): void
+    {
+        self::send(
+            $email,
+            'Payment received — waiting for rental confirmation',
+            "Your payment for {$vehicleName} (pickup {$pickupDate}) was received.\n\n"
+            . "The rental partner still needs to confirm this reservation. You will get another message once they accept it."
+        );
+    }
+
+    public static function rentalConfirmed(string $email, string $vehicleName, string $pickupDate): void
+    {
+        self::send(
+            $email,
+            'Rental confirmed — ' . $vehicleName,
+            "Your reservation for {$vehicleName} (pickup {$pickupDate}) has been confirmed by the rental partner.\n\nThey will contact you to arrange delivery."
+        );
+    }
+
+    public static function rentalDeclined(string $email, string $vehicleName, string $refundNote = ''): void
+    {
+        $body = "Your reservation for {$vehicleName} was declined by the rental partner.";
+        if ($refundNote !== '') {
+            $body .= "\n\n{$refundNote}";
+        }
+        self::send($email, 'Rental declined — ' . $vehicleName, $body);
     }
 
     public static function bookingCancelled(string $email, string $listingTitle, string $refundNote = ''): void
@@ -51,18 +107,22 @@ final class NotificationService
         self::send($email, $subject, $body);
     }
 
-    public static function guideApproved(string $email, string $name): void
+    public static function guideApproved(string $email, string $name, string $roleLabel = 'partner'): void
     {
-        self::send($email, 'Guide application approved', "Hi {$name},\n\nYour guide verification was approved. You can now publish listings on GuideMate.\n");
+        self::send(
+            $email,
+            'Application Approved',
+            "Hi {$name},\n\nYour {$roleLabel} application has been approved. You can now use your partner account on GuideMate.\n"
+        );
     }
 
-    public static function guideRejected(string $email, string $name, string $note = ''): void
+    public static function guideRejected(string $email, string $name, string $note = '', string $roleLabel = 'partner'): void
     {
-        $body = "Hi {$name},\n\nYour guide application was not approved.";
+        $body = "Hi {$name},\n\nYour {$roleLabel} application was not approved.";
         if ($note !== '') {
             $body .= "\n\nAdmin note: {$note}";
         }
-        self::send($email, 'Guide application update', $body);
+        self::send($email, 'Application update', $body);
     }
 
     private static function send(string $to, string $subject, string $body): void

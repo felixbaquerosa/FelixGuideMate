@@ -22,6 +22,10 @@ final class BookingController extends Controller
         if ($listing === null || $listing['status'] !== 'approved') {
             abort(404, 'Listing not found.');
         }
+        if (!Listing::isBookable($listing)) {
+            flash('info', 'This listing cannot be booked here. Message the host instead.');
+            redirect('/listing/' . $listing['slug']);
+        }
 
         $date = (string) $this->input('booking_date', '');
         $guests = max(1, (int) $this->input('guests', 1));
@@ -42,7 +46,7 @@ final class BookingController extends Controller
         $total = Listing::effectivePrice($listing) * $guests;
         $bookingId = Booking::create((int) $listing['id'], (int) Auth::id(), $date, $guests, $total, $notes);
 
-        flash('info', 'Almost there — complete your payment to confirm the booking.');
+        flash('info', 'Almost there — complete payment. The partner still needs to confirm after you pay.');
         redirect('/checkout/' . $bookingId);
     }
 
@@ -127,30 +131,36 @@ final class BookingController extends Controller
 
         $promoCode = strtoupper(trim((string) $this->input('promo_code', '')));
         if ($promoCode !== '') {
-            $check = PromoCode::validate($promoCode, (float) $booking['total_amount']);
-            if (!$check['valid']) {
+            $check = PromoCode::validate($promoCode, (float) $booking['total_amount'], (int) Auth::id());
+            if (!$check['valid'] || $check['id'] === null) {
                 flash_keep_old(['promo_code' => $check['message']], [], '/checkout/' . $booking['id']);
             }
             Booking::applyPromo((int) $booking['id'], (int) $check['id'], $check['discount']);
             PromoCode::incrementUse((int) $check['id']);
+            PromoCode::recordRedemption((int) Auth::id(), $promoCode, (int) $booking['id']);
             $booking = $this->ownedBooking((int) $id);
         }
 
         Payment::create((int) $booking['id'], (float) $booking['total_amount'], $method, 'paid');
-        Booking::updateStatus((int) $booking['id'], 'confirmed');
-        Booking::ensureVerifyToken((int) $booking['id']);
-
-        NotificationService::bookingConfirmed(
+        // Paid but not confirmed — the guide or hotel partner must accept it.
+        $customer = Auth::user();
+        NotificationService::bookingAwaitingConfirmation(
             (string) $booking['customer_email'],
             (string) $booking['listing_title'],
             (string) $booking['booking_date']
         );
-        $guide = \App\Models\User::find((int) $booking['guide_id']);
-        if ($guide !== null) {
-            NotificationService::bookingConfirmed((string) $guide['email'], (string) $booking['listing_title'], (string) $booking['booking_date']);
+        $owner = \App\Models\User::find((int) $booking['guide_id']);
+        if ($owner !== null && !empty($owner['email'])) {
+            NotificationService::bookingNeedsConfirmation(
+                (string) $owner['email'],
+                (string) ($owner['name'] ?? 'Partner'),
+                (string) $booking['listing_title'],
+                (string) ($customer['name'] ?? 'A tourist'),
+                (string) $booking['booking_date']
+            );
         }
 
-        flash('success', 'Payment successful! Your booking is confirmed.');
+        flash('success', 'Payment received. Your booking is waiting for the partner to confirm it. You can track it under My Bookings.');
         redirect('/bookings');
     }
 

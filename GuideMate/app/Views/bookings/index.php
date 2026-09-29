@@ -30,7 +30,8 @@
                                 <td><?= e(date('M j, Y', strtotime($b['booking_date']))) ?></td>
                                 <td><?= (int) $b['guests'] ?></td>
                                 <td><strong><?= money($b['total_amount']) ?></strong></td>
-                                <td><span class="pill pill-<?= e($b['status']) ?>"><?= e(ucfirst($b['status'])) ?></span>
+                                <td><span class="pill pill-<?= e($b['status']) ?>"><?= e(status_label((string) $b['status'])) ?></span>
+                                    <?php if ($b['status'] === 'pending'): ?><br><small class="hint">Waiting for the partner to confirm</small><?php endif; ?>
                                     <?php if ($b['status'] === 'refunded'): ?><br><small class="hint">Guide cancelled — payment returned</small><?php endif; ?>
                                 </td>
                                 <td><span class="pill pill-<?= e($b['payment_status'] ?? 'pending') ?>"><?= e(ucfirst($b['payment_status'] ?? 'unpaid')) ?></span></td>

@@ -1,3 +1,4 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import { API_BASE_URL } from '../config';
 
 // Fail fast instead of hanging forever when the backend is down/unreachable.
@@ -76,11 +77,29 @@ export type ApiListing = {
   featured: boolean;
   duration: string;
   owner_name: string;
+  owner_role?: string;
   description?: string;
   included?: string;
   not_included?: string;
   owner_id?: number;
   favorited?: boolean;
+  is_new?: boolean;
+  nearest_hotel?: NearestHotel | null;
+};
+
+export type NearestHotel = {
+  id: number;
+  title: string;
+  slug: string;
+  area: string;
+  address: string;
+  image: string;
+  price: number;
+  price_unit: string;
+  distance_km: number;
+  latitude: number;
+  longitude: number;
+  directions_url: string;
 };
 
 export type ApiArea = { slug: string; name: string; tagline: string };
@@ -96,6 +115,7 @@ export type ApiBooking = {
   guests: number;
   total_amount: number;
   status: string;
+  status_label?: string;
   area: string;
   reviewed?: boolean;
   can_review?: boolean;
@@ -130,6 +150,8 @@ export type HomePayload = {
   featured: ApiListing[];
   recommended: ApiListing[];
   areas: ApiArea[];
+  // Count of published (approved) places; used to detect newly added tours.
+  listings_total?: number;
 };
 
 // Origin (scheme + host) of the configured API, e.g. "http://10.0.4.99".
@@ -289,6 +311,8 @@ export type TripPin = {
 export const getTripMap = () =>
   api<{ bookings: TripPin[]; mapbox_token: string; mapillary_token: string }>('/api/trip-map');
 
+export const getMapsConfig = () => api<{ mapbox_token: string }>('/api/maps');
+
 export type ApiRentalVehicle = {
   id: string;
   name: string;
@@ -342,7 +366,7 @@ export const RENTAL_REPORT_TYPES: { value: string; label: string }[] = [
  * Reserve a vehicle with FULL up-front payment. Sent as multipart/form-data so
  * the tourist can attach a photo of the valid ID that the owner will hold.
  */
-export async function createRentalRequest(payload: {
+export function createRentalRequest(payload: {
   vehicle_id: string;
   vehicle_name: string;
   vehicle_type: string;
@@ -360,55 +384,34 @@ export async function createRentalRequest(payload: {
   payment_reference?: string;
   card_last4?: string;
 }): Promise<{ request: ApiRental }> {
-  const form = new FormData();
-  form.append('vehicle_id', payload.vehicle_id);
-  form.append('vehicle_name', payload.vehicle_name);
-  form.append('vehicle_type', payload.vehicle_type);
-  form.append('shop_name', payload.shop_name);
-  if (payload.location) form.append('location', payload.location);
-  form.append('pickup_date', payload.pickup_date);
-  form.append('rental_days', String(payload.rental_days));
-  form.append('price_per_day', String(payload.price_per_day));
-  form.append('customer_phone', payload.customer_phone);
-  if (payload.notes) form.append('notes', payload.notes);
-  form.append('id_type', payload.id_type);
-  if (payload.id_number) form.append('id_number', payload.id_number);
-  form.append('payment_method', payload.payment_method);
-  if (payload.payment_reference) form.append('payment_reference', payload.payment_reference);
-  if (payload.card_last4) form.append('card_last4', payload.card_last4);
+  const parameters: Record<string, string> = {
+    vehicle_id: payload.vehicle_id,
+    vehicle_name: payload.vehicle_name,
+    vehicle_type: payload.vehicle_type,
+    shop_name: payload.shop_name,
+    pickup_date: payload.pickup_date,
+    rental_days: String(payload.rental_days),
+    price_per_day: String(payload.price_per_day),
+    customer_phone: payload.customer_phone,
+    id_type: payload.id_type,
+    payment_method: payload.payment_method,
+  };
+  if (payload.location) parameters.location = payload.location;
+  if (payload.notes) parameters.notes = payload.notes;
+  if (payload.id_number) parameters.id_number = payload.id_number;
+  if (payload.payment_reference) parameters.payment_reference = payload.payment_reference;
+  if (payload.card_last4) parameters.card_last4 = payload.card_last4;
 
-  const uri = payload.id_document_uri;
-  const name = uri.split('/').pop() || `id_${Date.now()}.jpg`;
-  const ext = (/\.(\w+)$/.exec(name)?.[1] ?? 'jpg').toLowerCase();
-  const type = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-  form.append('id_document', { uri, name, type } as unknown as Blob);
-
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE_URL}/api/rentals`, {
-      method: 'POST',
-      headers,
-      body: form,
-      signal: controller.signal,
-    });
-  } catch {
-    throw new Error('Could not complete your reservation. Check your connection and try again.');
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const err = new Error((data && (data.error || data.message)) || 'Reservation failed.') as Error & { code?: string };
-    if (response.status === 401 || response.status === 403) err.code = 'UNAUTHORIZED';
-    throw err;
-  }
-  return data as { request: ApiRental };
+  return uploadFileMultipart<{ request: ApiRental }>(
+    '/api/rentals',
+    payload.id_document_uri,
+    'id_document',
+    parameters,
+    {
+      fallbackName: `id_${Date.now()}.jpg`,
+      connectionError: 'Could not complete your reservation. Check your connection and try again.',
+    }
+  );
 }
 
 export const getMyRentals = () => api<{ rentals: ApiRental[] }>('/api/rentals/mine');
@@ -430,6 +433,25 @@ export const createBooking = (payload: {
   payment_reference?: string;
   card_last4?: string;
 }) => api<{ booking: ApiBooking | null }>('/api/bookings', { method: 'POST', body: payload });
+
+export type ApiVoucher = {
+  code: string;
+  label: string;
+  description: string;
+  min_spend: number;
+  discount_percent: number | null;
+  discount_amount: number | null;
+  expires: string;
+  used: boolean;
+};
+
+export const getVouchers = () => api<{ vouchers: ApiVoucher[] }>('/api/vouchers');
+
+export const validateVoucher = (code: string, subtotal: number) =>
+  api<{ valid: boolean; discount: number; id: number | null; message: string }>('/api/vouchers/validate', {
+    method: 'POST',
+    body: { code, subtotal },
+  });
 
 export type FeedbackCategory = 'general' | 'bug' | 'feature' | 'praise';
 export type FeedbackStatus = 'new' | 'reviewed' | 'archived';
@@ -538,43 +560,77 @@ export async function submitDispute(payload: {
 export const apiUpdateProfile = (payload: { name?: string; bio?: string }) =>
   api<{ user: ApiUser }>('/api/profile', { method: 'POST', body: payload });
 
-// Avatar upload uses multipart/form-data, so it bypasses the JSON `api()` helper.
-export async function apiUploadAvatar(uri: string): Promise<{ user: ApiUser }> {
-  const name = uri.split('/').pop() || `avatar_${Date.now()}.jpg`;
-  const match = /\.(\w+)$/.exec(name);
-  const ext = (match ? match[1] : 'jpg').toLowerCase();
-  const type = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+// Guess a MIME type from a local file URI's extension.
+function mimeFromUri(uri: string, fallbackName: string): string {
+  const name = uri.split('/').pop() || fallbackName;
+  const ext = (/\.(\w+)$/.exec(name)?.[1] ?? 'jpg').toLowerCase();
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'pdf') return 'application/pdf';
+  return 'image/jpeg';
+}
 
-  const form = new FormData();
-  // React Native FormData file shape.
-  form.append('avatar', { uri, name, type } as unknown as Blob);
+/**
+ * Reliable multipart upload of a single local file (plus optional text fields)
+ * using Expo FileSystem's NATIVE uploader.
+ *
+ * We use this instead of `fetch` + `FormData` because sending a file through
+ * the JS `fetch`/`FormData` path is unreliable on React Native's New
+ * Architecture (it was failing every photo upload). `uploadAsync` performs the
+ * request with native networking (OkHttp / NSURLSession), which handles the
+ * `file://` URI and multipart boundary correctly.
+ */
+async function uploadFileMultipart<T = any>(
+  path: string,
+  fileUri: string,
+  fieldName: string,
+  parameters: Record<string, string> = {},
+  opts: { fallbackName?: string; connectionError?: string } = {}
+): Promise<T> {
+  const fallbackName = opts.fallbackName ?? `photo_${Date.now()}.jpg`;
+  const mimeType = mimeFromUri(fileUri, fallbackName);
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (authToken) headers.Authorization = `Bearer ${authToken}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  let response: Response;
+  let result: Awaited<ReturnType<typeof FileSystem.uploadAsync>>;
   try {
-    response = await fetch(`${API_BASE_URL}/api/profile/avatar`, {
-      method: 'POST',
+    result = await FileSystem.uploadAsync(`${API_BASE_URL}${path}`, fileUri, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName,
+      mimeType,
+      parameters,
       headers,
-      body: form,
-      signal: controller.signal,
     });
   } catch {
-    throw new Error('Could not upload the photo. Check your connection and try again.');
-  } finally {
-    clearTimeout(timeout);
+    throw new Error(
+      opts.connectionError ?? 'Could not upload the photo. Check your connection and try again.'
+    );
   }
 
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const err = new Error((data && (data.error || data.message)) || 'Upload failed.') as Error & { code?: string };
-    if (response.status === 401 || response.status === 403) err.code = 'UNAUTHORIZED';
+  let data: any = {};
+  try {
+    data = result.body ? JSON.parse(result.body) : {};
+  } catch {
+    data = {};
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    const err = new Error(
+      (data && (data.error || data.message)) || 'Upload failed.'
+    ) as Error & { code?: string };
+    if (result.status === 401 || result.status === 403) err.code = 'UNAUTHORIZED';
     throw err;
   }
-  return data as { user: ApiUser };
+  return data as T;
+}
+
+// Avatar upload uses multipart/form-data via the native uploader.
+export function apiUploadAvatar(uri: string): Promise<{ user: ApiUser }> {
+  return uploadFileMultipart<{ user: ApiUser }>('/api/profile/avatar', uri, 'avatar', {}, {
+    fallbackName: `avatar_${Date.now()}.jpg`,
+  });
 }
 
 // ── Messaging ──

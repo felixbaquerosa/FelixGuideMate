@@ -6,6 +6,7 @@ import {
     ActivityIndicator,
     Alert,
     Image,
+    Linking,
     Modal,
     ScrollView,
     StatusBar,
@@ -15,7 +16,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { ApiListing, createBooking, getListing, isUnauthorized, PaymentMethod, resolveImage } from '../../services/api';
+import { ApiListing, createBooking, getListing, isUnauthorized, PaymentMethod, resolveImage, validateVoucher } from '../../services/api';
 import { clearSession, restoreSession } from '../../lib/authStore';
 import { usePreferences } from '../../lib/preferences';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,6 +30,14 @@ const QR_INSTAPAY = require('../../assets/images/payment/qr-instapay.png');
 
 type BookingStep = 'details' | 'method' | 'qr' | 'card';
 
+type ReviewItem = {
+  id: number;
+  rating: number;
+  comment: string;
+  user_name: string;
+  created_at: string;
+};
+
 // Selectable start times for an experience (24h values, shown in 12h format).
 const TIME_SLOTS = [
   '06:00', '07:00', '08:00', '09:00', '10:00', '11:00',
@@ -36,12 +45,24 @@ const TIME_SLOTS = [
   '18:00', '19:00', '20:00',
 ];
 
+function formatReviewDate(value: string): string {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
 function formatTimeLabel(value: string): string {
   const [hStr, mStr] = value.split(':');
   const h = Number(hStr);
   const period = h >= 12 ? 'PM' : 'AM';
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${mStr} ${period}`;
+}
+
+function hostMessageLabel(listing: Pick<ApiListing, 'owner_name' | 'owner_role'>): string {
+  if (listing.owner_role === 'hotel_admin') return 'Message the hotel';
+  if (listing.owner_role === 'rental_admin') return 'Message the rental partner';
+  return listing.owner_name ? `Message ${listing.owner_name}` : 'Message the guide';
 }
 
 export default function ListingDetailScreen() {
@@ -56,6 +77,8 @@ export default function ListingDetailScreen() {
   const [favorited, setFavorited] = useState(false);
   const [canReview, setCanReview] = useState(false);
   const [bookedSlots, setBookedSlots] = useState<{ date: string; time: string }[]>([]);
+  const [reviews, setReviews] = useState<ReviewItem[]>([]);
+  const [reviewsOpen, setReviewsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -98,6 +121,7 @@ export default function ListingDetailScreen() {
       setAlreadyBooked(!!data.already_booked);
       setCanReview(!!data.can_review);
       setBookedSlots(Array.isArray(data.booked_slots) ? data.booked_slots : []);
+      setReviews(Array.isArray(data.reviews) ? data.reviews : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load this listing.');
     } finally {
@@ -199,7 +223,7 @@ export default function ListingDetailScreen() {
     }
   };
 
-  const applyVoucher = () => {
+  const applyVoucher = async () => {
     const voucher = findVoucher(voucherDraft);
     if (!voucher) {
       Alert.alert('Invalid voucher', 'Enter one of the vouchers shown in the Sale tab.');
@@ -207,6 +231,23 @@ export default function ListingDetailScreen() {
     }
     if (subtotal < voucher.minSpend) {
       Alert.alert('Voucher not available', `This voucher needs a minimum spend of ${formatPrice(voucher.minSpend)}.`);
+      return;
+    }
+    try {
+      const check = await validateVoucher(voucher.code, subtotal);
+      if (!check.valid) {
+        Alert.alert('Voucher not available', check.message);
+        return;
+      }
+    } catch (e) {
+      if (isUnauthorized(e)) {
+        Alert.alert('Sign in required', 'Sign in to redeem a voucher. Each code can only be used once per account.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Sign in', onPress: () => router.push('/(auth)/login') },
+        ]);
+        return;
+      }
+      Alert.alert('Could not apply voucher', e instanceof Error ? e.message : 'Please try again.');
       return;
     }
 
@@ -222,65 +263,79 @@ export default function ListingDetailScreen() {
   };
 
   const renderVoucherControls = () => (
-    <>
+    <View style={[styles.voucherCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
       {voucherCode ? (
-        <View style={[styles.voucherSummary, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.voucherSummaryTitle, { color: theme.textMain }]}>{appliedVoucher?.code} applied</Text>
-            <Text style={[styles.voucherSummaryText, { color: theme.textSub }]}>
+        <View style={styles.voucherApplied}>
+          <View style={[styles.voucherAppliedIcon, { backgroundColor: theme.inputBg }]}>
+            <Ionicons name="checkmark-circle" size={20} color={theme.accent} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.voucherSummaryTitle, { color: theme.textMain }]} numberOfLines={1}>
+              {appliedVoucher?.code} applied
+            </Text>
+            <Text style={[styles.voucherSummaryText, { color: theme.textSub }]} numberOfLines={1}>
               {voucherDiscount > 0
                 ? `You save ${formatPrice(voucherDiscount)}`
-                : `Minimum spend ${formatPrice(appliedVoucher?.minSpend ?? 0)} not met yet.`}
+                : `Min. spend ${formatPrice(appliedVoucher?.minSpend ?? 0)}`}
             </Text>
           </View>
-          <TouchableOpacity onPress={clearVoucher} activeOpacity={0.85}>
+          <TouchableOpacity onPress={clearVoucher} hitSlop={8} activeOpacity={0.85}>
             <Text style={[styles.voucherClear, { color: theme.accent }]}>Remove</Text>
           </TouchableOpacity>
         </View>
-      ) : null}
-
-      <TouchableOpacity
-        style={[styles.voucherToggle, { borderColor: theme.border, backgroundColor: theme.card }]}
-        activeOpacity={0.85}
-        onPress={() => {
-          setVoucherDraft(voucherCode);
-          setVoucherExpanded((value) => !value);
-        }}
-      >
-        <Ionicons name="pricetag-outline" size={18} color={theme.accent} style={{ marginRight: 12 }} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.voucherToggleTitle, { color: theme.textMain }]}>Enter voucher</Text>
-          <Text style={[styles.voucherToggleSub, { color: theme.textSub }]}>Apply a Sale tab code to reduce the total</Text>
-        </View>
-        <Ionicons name={voucherExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={theme.textSub} />
-      </TouchableOpacity>
-
-      {voucherExpanded ? (
-        <View style={styles.voucherEntryRow}>
-          <TextInput
-            style={[styles.input, styles.voucherInput, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.border }]}
-            placeholder="e.g. CEBU6"
-            placeholderTextColor={theme.textSub}
-            value={voucherDraft}
-            onChangeText={setVoucherDraft}
-            autoCapitalize="characters"
-          />
+      ) : (
+        <>
           <TouchableOpacity
-            style={[styles.voucherApplyBtn, { backgroundColor: theme.primary }]}
+            style={styles.voucherToggle}
             activeOpacity={0.85}
-            onPress={applyVoucher}
+            onPress={() => {
+              setVoucherDraft(voucherCode);
+              setVoucherExpanded((value) => !value);
+            }}
           >
-            <Text style={styles.voucherApplyText}>Apply</Text>
+            <Ionicons name="pricetag-outline" size={18} color={theme.accent} />
+            <View style={{ flex: 1, minWidth: 0, marginHorizontal: 10 }}>
+              <Text style={[styles.voucherToggleTitle, { color: theme.textMain }]}>Have a voucher?</Text>
+              <Text style={[styles.voucherToggleSub, { color: theme.textSub }]} numberOfLines={1}>
+                Enter a Sale tab code
+              </Text>
+            </View>
+            <Ionicons name={voucherExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={theme.textSub} />
           </TouchableOpacity>
-        </View>
-      ) : null}
+
+          {voucherExpanded ? (
+            <View style={styles.voucherEntryRow}>
+              <View style={[styles.voucherInputWrap, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
+                <TextInput
+                  style={[styles.voucherInput, { color: theme.textMain }]}
+                  placeholder="CEBU6"
+                  placeholderTextColor={theme.textSub}
+                  value={voucherDraft}
+                  onChangeText={setVoucherDraft}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                  onSubmitEditing={applyVoucher}
+                />
+              </View>
+              <TouchableOpacity
+                style={[styles.voucherApplyBtn, { backgroundColor: theme.accent }]}
+                activeOpacity={0.85}
+                onPress={applyVoucher}
+              >
+                <Text style={styles.voucherApplyText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </>
+      )}
 
       {voucherCode && voucherDiscount <= 0 ? (
         <Text style={[styles.voucherHint, { color: theme.textSub }]}>
-          The voucher is entered, but the current total does not meet the minimum spend yet.
+          This code is saved, but the current total is below the minimum spend.
         </Text>
       ) : null}
-    </>
+    </View>
   );
 
   const submitBooking = async (
@@ -303,10 +358,12 @@ export default function ListingDetailScreen() {
         card_last4: cardLast4,
         promo_code: voucherDiscount > 0 && appliedVoucher ? appliedVoucher.code : undefined,
       });
+      setVoucherCode('');
+      setVoucherDraft('');
       setModalOpen(false);
       Alert.alert(
         'Payment received',
-        `Your payment for "${listing.title}" on ${bookingDate}${bookingTime ? ` at ${formatTimeLabel(bookingTime)}` : ''} was received. Your booking is now pending approval — the admin will review and approve it shortly. You can track its status under Trips.`,
+        `Your payment for "${listing.title}" on ${bookingDate}${bookingTime ? ` at ${formatTimeLabel(bookingTime)}` : ''} was received. The partner still needs to confirm this booking. Track it under Trips — it will show as Awaiting confirmation until they accept it.`,
         [
           { text: 'View Trips', onPress: () => router.replace('/(tabs)/trips') },
           { text: 'OK' },
@@ -408,13 +465,23 @@ export default function ListingDetailScreen() {
               <Text style={[styles.factLabel, { color: theme.textSub }]}>Duration</Text>
               <Text style={[styles.factValue, { color: theme.textMain }]}>{listing.duration || 'N/A'}</Text>
             </View>
-            <View style={[styles.factCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            <TouchableOpacity
+              style={[styles.factCard, { backgroundColor: theme.card, borderColor: theme.border }]}
+              activeOpacity={0.7}
+              onPress={() => setReviewsOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="View reviews from other tourists"
+            >
               <Ionicons name="star" size={18} color="#F6B100" />
               <Text style={[styles.factLabel, { color: theme.textSub }]}>Rating</Text>
               <Text style={[styles.factValue, { color: theme.textMain }]}>
                 {listing.rating > 0 ? `${listing.rating} (${listing.review_count})` : 'No reviews'}
               </Text>
-            </View>
+              <View style={styles.factLinkRow}>
+                <Text style={[styles.factLink, { color: theme.accent }]}>See reviews</Text>
+                <Ionicons name="chevron-forward" size={12} color={theme.accent} />
+              </View>
+            </TouchableOpacity>
           </View>
 
           {listing.category ? (
@@ -431,7 +498,7 @@ export default function ListingDetailScreen() {
             >
               <Ionicons name="chatbubble-ellipses-outline" size={17} color={colors.accent} style={{ marginRight: 8 }} />
               <Text style={[styles.messageGuideText, { color: colors.accent }]}>
-                {listing.owner_name ? `Message ${listing.owner_name}` : 'Message the guide'}
+                {hostMessageLabel(listing)}
               </Text>
             </TouchableOpacity>
           ) : null}
@@ -445,6 +512,51 @@ export default function ListingDetailScreen() {
             <>
               <Text style={[styles.sectionTitle, { color: theme.textMain }]}>{"What's included"}</Text>
               <Text style={[styles.about, { color: theme.textSub }]}>{listing.included}</Text>
+            </>
+          ) : null}
+
+          {listing.nearest_hotel ? (
+            <>
+              <Text style={[styles.sectionTitle, { color: theme.textMain }]}>Nearest hotel</Text>
+              <View style={styles.hotelCard}>
+                <Image source={{ uri: resolveImage(listing.nearest_hotel.image) }} style={styles.hotelImage} />
+                <View style={styles.hotelDistanceBadge}>
+                  <Ionicons name="navigate" size={12} color="#0B3D2E" />
+                  <Text style={styles.hotelDistanceText}>
+                    {listing.nearest_hotel.distance_km} km away
+                  </Text>
+                </View>
+                <View style={styles.hotelBody}>
+                  <Text style={styles.hotelName} numberOfLines={1}>{listing.nearest_hotel.title}</Text>
+                  <View style={styles.hotelMetaRow}>
+                    <Ionicons name="location" size={13} color="#0B3D2E" />
+                    <Text style={styles.hotelMeta} numberOfLines={1}>
+                      {listing.nearest_hotel.area || listing.nearest_hotel.address}
+                    </Text>
+                  </View>
+                  {listing.nearest_hotel.price ? (
+                    <Text style={styles.hotelPrice}>
+                      {formatPrice(listing.nearest_hotel.price)}
+                      <Text style={styles.hotelPriceUnit}> / {listing.nearest_hotel.price_unit || 'night'}</Text>
+                    </Text>
+                  ) : null}
+                  <TouchableOpacity
+                    style={styles.hotelDirBtn}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      const url = listing.nearest_hotel?.directions_url;
+                      if (url) {
+                        Linking.openURL(url).catch(() =>
+                          Alert.alert('Unable to open maps', 'Please try again later.')
+                        );
+                      }
+                    }}
+                  >
+                    <Ionicons name="navigate-circle" size={18} color="#0B3D2E" style={{ marginRight: 7 }} />
+                    <Text style={styles.hotelDirText}>Get directions</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             </>
           ) : null}
 
@@ -498,6 +610,80 @@ export default function ListingDetailScreen() {
       </View>
 
       {/* Booking modal (multi-step) */}
+      {/* Reviews from other tourists — open by tapping the Rating card. */}
+      <Modal visible={reviewsOpen} transparent animationType="slide" onRequestClose={() => setReviewsOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: theme.bg }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.textMain }]}>
+                Reviews{listing.review_count > 0 ? ` (${listing.review_count})` : ''}
+              </Text>
+              <TouchableOpacity onPress={() => setReviewsOpen(false)} accessibilityLabel="Close reviews">
+                <Ionicons name="close" size={24} color={theme.textSub} />
+              </TouchableOpacity>
+            </View>
+
+            {listing.rating > 0 ? (
+              <View style={styles.reviewSummary}>
+                <Ionicons name="star" size={20} color="#F6B100" />
+                <Text style={[styles.reviewSummaryScore, { color: theme.textMain }]}>
+                  {listing.rating.toFixed(1)}
+                </Text>
+                <Text style={[styles.reviewSummaryCount, { color: theme.textSub }]}>
+                  · {listing.review_count} {listing.review_count === 1 ? 'review' : 'reviews'}
+                </Text>
+              </View>
+            ) : null}
+
+            <ScrollView style={{ maxHeight: 460 }} showsVerticalScrollIndicator={false}>
+              {reviews.length === 0 ? (
+                <View style={styles.reviewEmpty}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={34} color={theme.textSub} />
+                  <Text style={[styles.reviewEmptyText, { color: theme.textSub }]}>
+                    No reviews yet. Be the first to share your experience after your trip!
+                  </Text>
+                </View>
+              ) : (
+                reviews.map((r) => (
+                  <View key={r.id} style={[styles.reviewItem, { borderColor: theme.border }]}>
+                    <View style={styles.reviewItemHead}>
+                      <View style={[styles.reviewAvatar, { backgroundColor: theme.card }]}>
+                        <Text style={[styles.reviewAvatarText, { color: theme.accent }]}>
+                          {(r.user_name || 'T').charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.reviewName, { color: theme.textMain }]} numberOfLines={1}>
+                          {r.user_name || 'Traveler'}
+                        </Text>
+                        <View style={styles.reviewStars}>
+                          {[1, 2, 3, 4, 5].map((n) => (
+                            <Ionicons
+                              key={n}
+                              name={n <= r.rating ? 'star' : 'star-outline'}
+                              size={13}
+                              color="#F6B100"
+                            />
+                          ))}
+                        </View>
+                      </View>
+                      {r.created_at ? (
+                        <Text style={[styles.reviewDate, { color: theme.textSub }]}>
+                          {formatReviewDate(r.created_at)}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {r.comment ? (
+                      <Text style={[styles.reviewComment, { color: theme.textSub }]}>{r.comment}</Text>
+                    ) : null}
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={modalOpen} transparent animationType="slide" onRequestClose={() => setModalOpen(false)}>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: theme.bg }]}>
@@ -807,11 +993,67 @@ const styles = StyleSheet.create({
   factCard: { flex: 1, borderRadius: 14, borderWidth: 1, paddingVertical: 14, paddingHorizontal: 14 },
   factLabel: { fontSize: 12, marginTop: 6 },
   factValue: { fontSize: 15, fontWeight: '700', marginTop: 2 },
+  factLinkRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 6 },
+  factLink: { fontSize: 12, fontWeight: '700' },
+  reviewSummary: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  reviewSummaryScore: { fontSize: 22, fontWeight: '800' },
+  reviewSummaryCount: { fontSize: 14, fontWeight: '600' },
+  reviewEmpty: { alignItems: 'center', paddingVertical: 34, paddingHorizontal: 20, gap: 12 },
+  reviewEmptyText: { fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  reviewItem: { paddingVertical: 14, borderTopWidth: StyleSheet.hairlineWidth },
+  reviewItemHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  reviewAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  reviewAvatarText: { fontSize: 16, fontWeight: '800' },
+  reviewName: { fontSize: 14, fontWeight: '700' },
+  reviewStars: { flexDirection: 'row', gap: 1, marginTop: 3 },
+  reviewDate: { fontSize: 12 },
+  reviewComment: { fontSize: 14, lineHeight: 21, marginTop: 10 },
   metaLine: { fontSize: 13, fontWeight: '600' },
   messageGuideBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderRadius: 14, paddingVertical: 12, marginTop: 16 },
   messageGuideText: { fontSize: 15, fontWeight: '700' },
   sectionTitle: { fontSize: 17, fontWeight: '800', marginTop: 20, marginBottom: 10 },
   about: { fontSize: 14, lineHeight: 22 },
+  hotelCard: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#EAF7F0',
+    borderWidth: 1.5,
+    borderColor: '#0B3D2E',
+    shadowColor: '#0B3D2E',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  hotelImage: { width: '100%', height: 150, backgroundColor: '#D4E9DE' },
+  hotelDistanceBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FBE38A',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  hotelDistanceText: { fontSize: 12, fontWeight: '800', color: '#0B3D2E', marginLeft: 4 },
+  hotelBody: { padding: 14 },
+  hotelName: { fontSize: 16, fontWeight: '800', color: '#0B3D2E' },
+  hotelMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  hotelMeta: { fontSize: 13, color: '#3B6B57', marginLeft: 4, flex: 1 },
+  hotelPrice: { fontSize: 15, fontWeight: '800', color: '#0B3D2E', marginTop: 8 },
+  hotelPriceUnit: { fontSize: 12, fontWeight: '600', color: '#3B6B57' },
+  hotelDirBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FBE38A',
+    borderRadius: 12,
+    paddingVertical: 11,
+    marginTop: 12,
+  },
+  hotelDirText: { fontSize: 14, fontWeight: '800', color: '#0B3D2E' },
   bookBar: {
     position: 'absolute',
     left: 0,
@@ -864,16 +1106,19 @@ const styles = StyleSheet.create({
   qrImage: { width: 230, height: 230 },
   qrHint: { fontSize: 13, lineHeight: 19, marginBottom: 4, textAlign: 'center' },
   cardRow: { flexDirection: 'row' },
-  voucherSummary: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 14, gap: 12 },
+  voucherCard: { borderWidth: 1, borderRadius: 16, marginBottom: 14, overflow: 'hidden' },
+  voucherApplied: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
+  voucherAppliedIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   voucherSummaryTitle: { fontSize: 14, fontWeight: '800' },
   voucherSummaryText: { fontSize: 12, marginTop: 2 },
   voucherClear: { fontSize: 13, fontWeight: '800' },
-  voucherToggle: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 14 },
+  voucherToggle: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12 },
   voucherToggleTitle: { fontSize: 14, fontWeight: '800' },
   voucherToggleSub: { fontSize: 12, marginTop: 2 },
-  voucherEntryRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
-  voucherInput: { flex: 1, borderWidth: 1 },
-  voucherApplyBtn: { borderRadius: 12, paddingVertical: 13, paddingHorizontal: 16, alignItems: 'center' },
+  voucherEntryRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 12, gap: 8 },
+  voucherInputWrap: { flex: 1, minWidth: 0, borderWidth: 1, borderRadius: 12, height: 44, justifyContent: 'center' },
+  voucherInput: { paddingHorizontal: 12, paddingVertical: 0, fontSize: 15, height: 44 },
+  voucherApplyBtn: { height: 44, borderRadius: 12, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   voucherApplyText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
-  voucherHint: { fontSize: 12, marginTop: 8, lineHeight: 17 },
+  voucherHint: { fontSize: 12, lineHeight: 17, paddingHorizontal: 12, paddingBottom: 12 },
 });

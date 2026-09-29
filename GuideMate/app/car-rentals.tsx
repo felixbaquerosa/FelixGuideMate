@@ -186,8 +186,8 @@ export default function CarRentalsScreen() {
         card_last4: payMethod === 'card' ? cardLast4 : undefined,
       });
       Alert.alert(
-        'Reservation confirmed',
-        `You paid ₱${total.toLocaleString()} for your ${selected.type.toLowerCase()} rental. ${selected.shop} will contact you to arrange delivery. Track it under "My rentals".`,
+        'Reservation submitted',
+        `You paid ₱${total.toLocaleString()} for your ${selected.type.toLowerCase()} rental. It is waiting for the rental partner to confirm. Track it under "My rentals".`,
         [{ text: 'OK', onPress: () => { setSelected(null); router.push('/my-rentals'); } }]
       );
     } catch (e) {

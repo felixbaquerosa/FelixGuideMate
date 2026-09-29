@@ -47,6 +47,7 @@ final class Message
 
         return Database::all(
             'SELECT u.id AS partner_id, u.name AS partner_name, u.avatar AS partner_avatar,
+                    u.guide_warned AS partner_warned,
                     m.body AS last_body, m.created_at AS last_at,
                     SUM(CASE WHEN m.receiver_id = :uid AND m.is_read = 0 THEN 1 ELSE 0 END) AS unread,
                     COALESCE(cs.is_pinned, 0) AS is_pinned
@@ -55,7 +56,7 @@ final class Message
              LEFT JOIN conversation_settings cs ON cs.user_id = :uid5 AND cs.partner_id = u.id
              WHERE (m.sender_id = :uid3 OR m.receiver_id = :uid4)
                AND ' . $archivedClause . '
-             GROUP BY u.id, u.name, u.avatar, cs.is_pinned
+             GROUP BY u.id, u.name, u.avatar, u.guide_warned, cs.is_pinned
              ORDER BY COALESCE(cs.is_pinned, 0) DESC, MAX(m.created_at) DESC',
             [
                 'uid' => $userId,

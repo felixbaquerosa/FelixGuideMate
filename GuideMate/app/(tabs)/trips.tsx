@@ -29,7 +29,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 // Friendly labels shown to the tourist for each booking status.
 const STATUS_LABEL: Record<string, string> = {
-  pending: 'Processing',
+  pending: 'Awaiting confirmation',
   confirmed: 'Approved',
   completed: 'Completed',
   cancelled: 'Cancelled',
@@ -99,7 +99,7 @@ export default function TripsScreen() {
             <Text style={[styles.cardTitle, { color: colors.text }]} numberOfLines={1}>{item.listing_title}</Text>
             <View style={[styles.statusChip, { backgroundColor: statusColor + '22' }]}>
               <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-              <Text style={[styles.statusText, { color: statusColor }]}>{STATUS_LABEL[item.status] ?? item.status}</Text>
+              <Text style={[styles.statusText, { color: statusColor }]}>{item.status_label ?? STATUS_LABEL[item.status] ?? item.status}</Text>
             </View>
           </View>
           <View style={styles.metaRow}>

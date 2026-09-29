@@ -10,10 +10,12 @@
 $errors = $errors ?? [];
 $user = auth_user();
 $isOwner = $user && (int) $user['id'] === (int) $listing['user_id'];
+$isBookable = $isBookable ?? \App\Models\Listing::isBookable($listing);
 $canSeeMapLocation = $canSeeMapLocation ?? false;
 $lat = $canSeeMapLocation ? ($listing['latitude'] ?? null) : null;
 $lng = $canSeeMapLocation ? ($listing['longitude'] ?? null) : null;
 $gallery = $gallery ?: [];
+$host = host_labels($listing['owner_role'] ?? null);
 ?>
 <div class="container">
     <div class="breadcrumb">
@@ -48,7 +50,7 @@ $gallery = $gallery ?: [];
                     <span class="count">(<?= $summary['count'] ?> reviews)</span></span>
                 <span>📍 <?= e($listing['area']) ?></span>
                 <?php if (!empty($listing['duration'])): ?><span>⏱️ <?= e($listing['duration']) ?></span><?php endif; ?>
-                <?php if (!empty($guideBadge)): ?><span class="chip"><?= e($guideBadge) ?> Guide</span><?php endif; ?>
+                <?php if (!empty($guideBadge)): ?><span class="chip"><?= e($guideBadge) ?> <?= e($host['badge']) ?></span><?php endif; ?>
             </div>
 
             <?php if (!empty($weather)): ?>
@@ -95,7 +97,9 @@ $gallery = $gallery ?: [];
                         </div>
                     <?php endif; ?>
                 </div>
+                <?php if ($isBookable): ?>
                 <p class="hint mt-2">All fees listed under “Included” are covered when you pay on GuideMate. Guides must not ask for extra payment unless it is listed under “Not included”. <a href="<?= e(url('/policy')) ?>">Read our policy</a></p>
+                <?php endif; ?>
             <?php endif; ?>
 
             <?php if ($lat && $lng): ?>
@@ -206,7 +210,7 @@ $gallery = $gallery ?: [];
                 <div class="guide-mini">
                     <img src="<?= e(img_src($listing['owner_avatar'] ?? null, 'avatar' . $listing['user_id'])) ?>" alt="">
                     <div>
-                        <small class="hint">Your guide / host</small><br>
+                        <small class="hint"><?= e($host['sidebar']) ?></small><br>
                         <strong><?= e($listing['owner_name']) ?></strong>
                     </div>
                 </div>
@@ -214,12 +218,12 @@ $gallery = $gallery ?: [];
                 <?php if ($isOwner): ?>
                     <p class="hint">This is your listing.</p>
                     <a href="<?= e(url('/dashboard/listings/' . $listing['id'] . '/edit')) ?>" class="btn btn-ghost btn-block">Edit listing</a>
-                <?php else: ?>
+                <?php elseif ($isBookable): ?>
                     <div class="policy-note">
                         <strong>Protected booking</strong>
-                        <p class="mb-0">Pay on GuideMate — your guide must not ask for extra money unless it was listed as “Not included” before you booked.</p>
+                        <p class="mb-0">Pay on GuideMate — your <?= e($host['noun']) ?> must not ask for extra money unless it was listed as “Not included” before you booked.</p>
                     </div>
-                    <form method="post" action="<?= e(url('/listing/' . $listing['id'] . '/book')) ?>" id="bookingForm" data-price="<?= e((string) ($displayPrice ?? $listing['price'])) ?>">
+                    <form method="post" action="<?= e(url('/listing/' . $listing['id'] . '/book')) ?>" id="bookingForm" data-price="<?= e((string) ($displayPrice ?? $listing['price'])) ?>" data-logged-in="<?= $user ? '1' : '0' ?>" data-login-url="<?= e(url('/login?redirect=' . rawurlencode('/listing/' . ($listing['slug'] ?? $listing['id'])))) ?>">
                         <?= csrf_field() ?>
                         <div class="field-row">
                             <label for="booking_date">Date</label>
@@ -240,15 +244,105 @@ $gallery = $gallery ?: [];
                             <strong id="bookingTotal" style="font-size:1.2rem;color:var(--teal-900);"><?= money($displayPrice ?? $listing['price']) ?></strong>
                         </div>
                         <button class="btn btn-primary btn-block btn-lg" type="submit"><?= $user ? 'Book now' : 'Log in to book' ?></button>
+                        <p class="hint mt-2 mb-0">Payment holds the date. The <?= e($host['noun']) ?> must still confirm the booking.</p>
                     </form>
 
                     <form method="post" action="<?= e(url('/listing/' . $listing['id'] . '/contact')) ?>" class="mt-2">
                         <?= csrf_field() ?>
-                        <button class="btn btn-ghost btn-block" type="submit">💬 Message the guide</button>
+                        <button class="btn btn-ghost btn-block" type="submit">💬 <?= e($host['message']) ?></button>
                     </form>
+                <?php else: ?>
+                    <p class="hint">Inquire with the <?= e($host['noun']) ?> for availability. Bookings on GuideMate are for tour guides.</p>
+                    <?php if ($user): ?>
+                        <form method="post" action="<?= e(url('/listing/' . $listing['id'] . '/contact')) ?>">
+                            <?= csrf_field() ?>
+                            <button class="btn btn-primary btn-block btn-lg" type="submit">💬 <?= e($host['message']) ?></button>
+                        </form>
+                    <?php else: ?>
+                        <a class="btn btn-primary btn-block btn-lg" href="<?= e(url('/login?redirect=' . rawurlencode('/listing/' . ($listing['slug'] ?? $listing['id'])))) ?>">💬 <?= e($host['message']) ?></a>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </aside>
     </div>
 </div>
 <div style="height:3rem;"></div>
+
+<script>
+(function () {
+    var form = document.getElementById('bookingForm');
+    if (!form) { return; }
+
+    var dateInput = document.getElementById('booking_date');
+    var guestsInput = document.getElementById('guests');
+    var loggedIn = form.getAttribute('data-logged-in') === '1';
+    var loginUrl = form.getAttribute('data-login-url') || '';
+
+    var booked = (dateInput && dateInput.getAttribute('data-booked') || '')
+        .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+
+    function showError(el, msg) {
+        if (!el) { return; }
+        el.style.outline = '2px solid #DC2626';
+        var next = el.parentNode.querySelector('.js-field-error');
+        if (!next) {
+            next = document.createElement('div');
+            next.className = 'field-error js-field-error';
+            el.parentNode.appendChild(next);
+        }
+        next.textContent = msg;
+    }
+
+    function clearError(el) {
+        if (!el) { return; }
+        el.style.outline = '';
+        var next = el.parentNode.querySelector('.js-field-error');
+        if (next) { next.remove(); }
+    }
+
+    function validate() {
+        var ok = true;
+        clearError(dateInput);
+        clearError(guestsInput);
+
+        var val = dateInput ? dateInput.value : '';
+        if (!val) {
+            showError(dateInput, 'Please choose a date.');
+            ok = false;
+        } else {
+            var today = new Date(); today.setHours(0, 0, 0, 0);
+            var chosen = new Date(val + 'T00:00:00');
+            if (chosen < today) {
+                showError(dateInput, 'Please choose a date in the future.');
+                ok = false;
+            } else if (booked.indexOf(val) !== -1) {
+                showError(dateInput, 'That date is already booked. Please pick another.');
+                ok = false;
+            }
+        }
+
+        var guests = guestsInput ? parseInt(guestsInput.value, 10) : 1;
+        if (!guests || guests < 1) {
+            showError(guestsInput, 'Please enter at least 1 guest.');
+            ok = false;
+        }
+        return ok;
+    }
+
+    form.addEventListener('submit', function (e) {
+        // Always validate first.
+        if (!validate()) {
+            e.preventDefault();
+            var firstError = form.querySelector('.js-field-error');
+            if (firstError) { firstError.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            return;
+        }
+        // Form is valid but the visitor is not signed in: send them to login,
+        // then bring them right back to this listing to complete the booking.
+        if (!loggedIn && loginUrl) {
+            e.preventDefault();
+            window.location.href = loginUrl;
+        }
+    });
+})();
+</script>

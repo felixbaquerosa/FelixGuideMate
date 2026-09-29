@@ -8,12 +8,36 @@ use App\Core\Database;
 
 final class Category
 {
+    /** Categories hidden from the tourist catalog (same as the mobile app). */
+    public const HIDDEN_SLUGS = ['restaurants'];
+
+    public static function isHiddenSlug(?string $slug): bool
+    {
+        if ($slug === null || $slug === '') {
+            return false;
+        }
+        return in_array(strtolower($slug), self::HIDDEN_SLUGS, true);
+    }
+
     /**
      * @return array<int, array<string, mixed>>
      */
     public static function all(): array
     {
         return Database::all('SELECT * FROM categories ORDER BY sort_order, name');
+    }
+
+    /**
+     * Tourist-facing categories (restaurants are retired, matching mobile).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function publicAll(): array
+    {
+        return array_values(array_filter(
+            self::all(),
+            static fn (array $row): bool => !self::isHiddenSlug((string) ($row['slug'] ?? ''))
+        ));
     }
 
     /**
@@ -46,5 +70,16 @@ final class Category
              GROUP BY c.id
              ORDER BY c.sort_order, c.name'
         );
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public static function withPublicCounts(): array
+    {
+        return array_values(array_filter(
+            self::withCounts(),
+            static fn (array $row): bool => !self::isHiddenSlug((string) ($row['slug'] ?? ''))
+        ));
     }
 }

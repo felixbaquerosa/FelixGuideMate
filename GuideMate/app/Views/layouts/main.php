@@ -3,6 +3,9 @@
 $user = auth_user();
 $pageTitle = $title ?? null;
 $isGuide = ($user['role'] ?? null) === 'guide';
+// Any service provider (guide, hotel partner, rental partner) works from their
+// own dashboard, so the tourist-facing category links are hidden for them.
+$isProvider = $user !== null && \App\Models\User::isProviderRole((string) ($user['role'] ?? ''));
 
 // Work out the current path (base-path aware) to tell public browse pages apart
 // from a user's own account area (dashboard, bookings, profile, ...).
@@ -13,7 +16,7 @@ if ($base !== '' && str_starts_with($current, $base)) {
 }
 $current = '/' . trim($current, '/');
 $publicBrowse = $current === '/'
-    || in_array($current, ['/listings', '/things-to-do', '/tour-guides', '/hotels', '/restaurants'], true)
+    || in_array($current, ['/listings', '/things-to-do', '/tour-guides', '/hotels'], true)
     || str_starts_with($current, '/listing/');
 $isMessages = str_starts_with($current, '/messages');
 $isDashboard = str_starts_with($current, '/dashboard') || $current === '/profile';
@@ -29,8 +32,6 @@ if ($headerUser) {
     $unread = \App\Models\Message::unreadCount((int) $headerUser['id']);
 }
 $currentLocale = $_SESSION['_locale'] ?? 'en';
-$currentCurrency = strtoupper($_SESSION['_currency'] ?? 'USD');
-$prefLabel = \App\Core\LocaleCatalog::headerLabel($currentLocale, $currentCurrency);
 ?>
 <!DOCTYPE html>
 <html lang="<?= e($currentLocale === 'tl' ? 'tl' : 'en') ?>">
@@ -38,7 +39,7 @@ $prefLabel = \App\Core\LocaleCatalog::headerLabel($currentLocale, $currentCurren
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= e($pageTitle ? "$pageTitle · GuideMate" : 'GuideMate · Discover Cebu') ?></title>
-    <meta name="description" content="GuideMate — discover the best tours, guides, hotels and restaurants in Cebu, Philippines.">
+    <meta name="description" content="GuideMate — discover the best tours, local guides and stays in Cebu, Philippines.">
     <link rel="icon" type="image/png" href="<?= e(asset('img/logo-icon.png')) ?>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -65,26 +66,17 @@ $prefLabel = \App\Core\LocaleCatalog::headerLabel($currentLocale, $currentCurren
         </button>
 
         <nav class="main-nav" id="mainNav">
-            <?php if (!$isGuide): ?>
-                <a href="<?= e(url('/things-to-do')) ?>" class="<?= active_when('/things-to-do') ?>"><?= __('nav_things', 'Things to Do') ?></a>
-                <a href="<?= e(url('/tour-guides')) ?>" class="<?= active_when('/tour-guides') ?>"><?= __('nav_guides', 'Tour Guides') ?></a>
-                <a href="<?= e(url('/hotels')) ?>" class="<?= active_when('/hotels') ?>"><?= __('nav_hotels', 'Hotels') ?></a>
-                <a href="<?= e(url('/restaurants')) ?>" class="<?= active_when('/restaurants') ?>"><?= __('nav_restaurants', 'Restaurants') ?></a>
+            <?php if (!$isProvider): ?>
+                <a href="<?= e(url('/things-to-do')) ?>" class="nav-item <?= active_when('/things-to-do') ?>"><?= __('nav_things', 'Things to Do') ?></a>
+                <a href="<?= e(url('/tour-guides')) ?>" class="nav-item <?= active_when('/tour-guides') ?>"><?= __('nav_guides', 'Tour Guides') ?></a>
+                <a href="<?= e(url('/hotels')) ?>" class="nav-item <?= active_when('/hotels') ?>"><?= __('nav_hotels', 'Hotels') ?></a>
             <?php endif; ?>
 
             <div class="nav-spacer"></div>
 
-            <button type="button" class="pref-trigger" id="prefOpen" aria-label="<?= e(__('pref_title', 'Preferences')) ?>" title="<?= e(__('pref_title', 'Preferences')) ?>">
-                <svg class="pref-trigger-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.75"/>
-                    <path d="M3 12h18M12 3c2.5 2.8 2.5 15.2 0 18M12 3c-2.5 2.8-2.5 15.2 0 18" stroke="currentColor" stroke-width="1.75"/>
-                </svg>
-                <span class="pref-trigger-label"><?= e($prefLabel) ?></span>
-            </button>
-
             <?php if ($headerUser): ?>
-                <a href="<?= e(url('/messages')) ?>" class="nav-icon" title="Messages">
-                    Messages<?php if ($unread > 0): ?><span class="badge"><?= (int) $unread ?></span><?php endif; ?>
+                <a href="<?= e(url('/messages')) ?>" class="nav-icon" title="Messages" aria-label="Messages">
+                    <?= admin_icon('messages', 22) ?><?php if ($unread > 0): ?><span class="badge"><?= (int) $unread ?></span><?php endif; ?>
                 </a>
                 <div class="nav-menu">
                     <button class="nav-avatar" id="userMenuBtn">
@@ -94,7 +86,10 @@ $prefLabel = \App\Core\LocaleCatalog::headerLabel($currentLocale, $currentCurren
                     <div class="dropdown" id="userMenu">
                         <a href="<?= e(url('/dashboard')) ?>">Dashboard</a>
                         <a href="<?= e(url('/bookings')) ?>">My Bookings</a>
-                        <a href="<?= e(url('/favorites')) ?>">Saved</a>
+                        <?php // Saved/favorites is a tourist feature — hidden for providers. ?>
+                        <?php if (!$isProvider): ?>
+                            <a href="<?= e(url('/favorites')) ?>">Saved</a>
+                        <?php endif; ?>
                         <a href="<?= e(url('/profile')) ?>">Profile</a>
                         <form method="post" action="<?= e(url('/logout')) ?>">
                             <?= csrf_field() ?>
@@ -135,14 +130,13 @@ $prefLabel = \App\Core\LocaleCatalog::headerLabel($currentLocale, $currentCurren
                     <span class="brand-mark">◐</span><span class="brand-text">Guide<strong>Mate</strong></span>
                 </a>
             <?php endif; ?>
-            <p class="footer-tag">Your local companion for discovering the best of <strong>Cebu</strong> — tours, guides, stays and food.</p>
+            <p class="footer-tag">Your local companion for discovering the best of <strong>Cebu</strong> — tours, guides and stays.</p>
         </div>
         <div>
             <h4>Explore</h4>
             <a href="<?= e(url('/things-to-do')) ?>">Things to Do</a>
             <a href="<?= e(url('/tour-guides')) ?>">Tour Guides</a>
             <a href="<?= e(url('/hotels')) ?>">Hotels &amp; Stays</a>
-            <a href="<?= e(url('/restaurants')) ?>">Restaurants</a>
         </div>
         <div>
             <h4>Account</h4>
@@ -161,11 +155,6 @@ $prefLabel = \App\Core\LocaleCatalog::headerLabel($currentLocale, $currentCurren
     </div>
 </footer>
 <?php endif; ?>
-
-<?= \App\Core\View::partial('partials/preferences-modal', [
-    'currentLocale' => $currentLocale,
-    'currentCurrency' => $currentCurrency,
-]) ?>
 
 <script src="<?= e(asset('js/main.js')) ?>"></script>
 </body>

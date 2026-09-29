@@ -2,17 +2,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import HumanVerification from '../../components/HumanVerification';
+import { AppToast } from '../../components/ui';
 import { hasBiometricLogin, login as loginUser, loginWithBackendOAuth, loginWithBiometrics, loginWithSocial } from '../../lib/authStore';
 import { isProviderConfigured, SocialProvider } from '../../lib/socialAuth';
 import { getSavedName } from '../../lib/biometric';
-import { LANGUAGES, LanguageCode, usePreferences } from '../../lib/preferences';
+import { usePreferences } from '../../lib/preferences';
 import {
     ActivityIndicator,
     Dimensions,
-    FlatList,
     ImageBackground,
     KeyboardAvoidingView,
-    Modal,
     Platform,
     ScrollView,
     StatusBar,
@@ -23,6 +22,7 @@ import {
     useColorScheme,
     View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { height } = Dimensions.get('window');
 
@@ -30,6 +30,7 @@ export default function LoginScreen() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const insets = useSafeAreaInsets();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -39,18 +40,26 @@ export default function LoginScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [savedName, setSavedName] = useState('');
-  const [langOpen, setLangOpen] = useState(false);
   const [socialBusy, setSocialBusy] = useState<SocialProvider | null>(null);
+  const [logoutToast, setLogoutToast] = useState(false);
+  const [logoutToastKey, setLogoutToastKey] = useState(0);
 
-  const { language, setLanguage, t } = usePreferences();
-  const currentLang = LANGUAGES.find((l) => l.code === language);
+  const { t } = usePreferences();
 
   // If the OAuth redirect route bounced back with an error, show it here.
-  const { social_error } = useLocalSearchParams<{ social_error?: string | string[] }>();
+  const { social_error, loggedOut } = useLocalSearchParams<{ social_error?: string | string[]; loggedOut?: string | string[] }>();
   useEffect(() => {
     const msg = Array.isArray(social_error) ? social_error[0] : social_error;
     if (msg) setError(msg);
   }, [social_error]);
+
+  useEffect(() => {
+    const flag = Array.isArray(loggedOut) ? loggedOut[0] : loggedOut;
+    if (flag === '1') {
+      setLogoutToast(true);
+      setLogoutToastKey((n) => n + 1);
+    }
+  }, [loggedOut]);
 
   // Dynamic colors mapping based on system device theme
   const theme = {
@@ -172,10 +181,6 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.topActions}>
-          <TouchableOpacity style={styles.langButton} onPress={() => setLangOpen(true)} activeOpacity={0.8}>
-            <Ionicons name="globe-outline" size={16} color="#FFFFFF" />
-            <Text style={styles.langButtonText}>{(currentLang?.code ?? 'EN').toUpperCase()}</Text>
-          </TouchableOpacity>
           <TouchableOpacity style={styles.closeButton} onPress={handleClose} activeOpacity={0.8}>
             <Ionicons name="close" size={18} color="#FFFFFF" />
           </TouchableOpacity>
@@ -311,22 +316,6 @@ export default function LoginScreen() {
             )}
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.socialButton, { backgroundColor: '#1877F2', borderColor: '#1877F2' }, socialBusy && { opacity: 0.6 }]}
-            onPress={() => handleSocial('facebook')}
-            activeOpacity={0.85}
-            disabled={!!socialBusy}
-          >
-            {socialBusy === 'facebook' ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <>
-                <Ionicons name="logo-facebook" size={19} color="#FFFFFF" style={{ marginRight: 10 }} />
-                <Text style={[styles.socialText, { color: '#FFFFFF' }]}>{t('continue_facebook')}</Text>
-              </>
-            )}
-          </TouchableOpacity>
-
           {/* Continue as guest */}
           <TouchableOpacity style={styles.guestButton} onPress={handleClose} activeOpacity={0.7}>
             <Ionicons name="arrow-forward-outline" size={16} color={theme.textSub} style={{ marginRight: 6 }} />
@@ -335,41 +324,14 @@ export default function LoginScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Language picker */}
-      <Modal visible={langOpen} transparent animationType="slide" onRequestClose={() => setLangOpen(false)}>
-        <View style={styles.modalBackdrop}>
-          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setLangOpen(false)} />
-          <View style={[styles.modalSheet, { backgroundColor: theme.bg }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.textMain }]}>{t('choose_language')}</Text>
-              <TouchableOpacity onPress={() => setLangOpen(false)}>
-                <Ionicons name="close" size={24} color={theme.textSub} />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={LANGUAGES}
-              keyExtractor={(item) => item.code}
-              style={{ maxHeight: 380 }}
-              renderItem={({ item }) => {
-                const selected = item.code === language;
-                return (
-                  <TouchableOpacity
-                    style={[styles.langOption, { borderTopColor: theme.dividerLine }]}
-                    activeOpacity={0.6}
-                    onPress={() => {
-                      setLanguage(item.code as LanguageCode);
-                      setLangOpen(false);
-                    }}
-                  >
-                    <Text style={[styles.langOptionText, { color: theme.textMain }]}>{item.label}</Text>
-                    {selected ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          </View>
-        </View>
-      </Modal>
+      <AppToast
+        key={logoutToastKey}
+        visible={logoutToast}
+        title="Logged Out"
+        subtitle="You have been logged out successfully."
+        top={insets.top + 8}
+        onHide={() => setLogoutToast(false)}
+      />
     </View>
   );
 }

@@ -57,13 +57,13 @@ $statusPill = [
                     <?php if ($status !== 'approved'): ?>
                         <form method="post" action="<?= e(url('/admin/guides/' . $g['id'] . '/approve')) ?>">
                             <?= csrf_field() ?>
-                            <button class="btn btn-primary btn-sm">✓ Approve</button>
+                            <button type="submit" class="btn btn-primary btn-sm">✓ Approve</button>
                         </form>
                     <?php endif; ?>
                     <form method="post" action="<?= e(url('/admin/guides/' . $g['id'] . '/reject')) ?>" class="reject-form">
                         <?= csrf_field() ?>
                         <input class="input" type="text" name="note" placeholder="Reason (optional, shown to the applicant)">
-                        <button class="btn btn-ghost btn-sm">Reject</button>
+                        <button type="submit" class="btn btn-ghost btn-sm">Reject</button>
                     </form>
                 </div>
             </div>

@@ -13,13 +13,14 @@ use App\Models\Favorite;
 use App\Models\Listing;
 use App\Models\Review;
 use App\Models\ReviewImage;
+use App\Models\User;
 use App\Services\WeatherService;
 
 final class ListingController extends Controller
 {
     public function index(): void
     {
-        $this->renderBrowse(null, 'Explore Cebu', 'All tours, guides, stays and restaurants across Cebu.');
+        $this->renderBrowse(null, 'Explore Cebu', 'All tours, guides and stays across Cebu.');
     }
 
     public function thingsToDo(): void
@@ -29,7 +30,31 @@ final class ListingController extends Controller
 
     public function tourGuides(): void
     {
-        $this->renderBrowse('tour-guides', 'Tour Guides in Cebu', 'Hire trusted, local Cebuano guides.');
+        $userId = Auth::id();
+        $guides = [];
+        foreach (User::guides('approved') as $u) {
+            if ($userId !== null && (int) $u['id'] === $userId) {
+                continue;
+            }
+            $stats = Booking::guideRatingStats((int) $u['id']);
+            $u['rating'] = (float) ($stats['avg_rating'] ?? 0);
+            $u['review_count'] = (int) ($stats['review_count'] ?? 0);
+            $u['completed_tours'] = (int) ($stats['completed'] ?? 0);
+            $u['available'] = !Booking::isGuideBusyToday((int) $u['id']);
+            $u['online'] = User::isOnline((int) $u['id']);
+            $guides[] = $u;
+        }
+        usort($guides, static function (array $a, array $b): int {
+            return [$b['available'], $b['rating'], $b['completed_tours']]
+                <=> [$a['available'], $a['rating'], $a['completed_tours']];
+        });
+
+        $this->view('listings/guides', [
+            'title' => 'Tour Guides in Cebu',
+            'heading' => 'Tour Guides in Cebu',
+            'sub' => 'Message a trusted local guide — the same directory as the GuideMate app.',
+            'guides' => $guides,
+        ]);
     }
 
     public function hotels(): void
@@ -39,7 +64,7 @@ final class ListingController extends Controller
 
     public function restaurants(): void
     {
-        $this->renderBrowse('restaurants', 'Restaurants in Cebu', 'Where to eat — from lechon to fine dining.');
+        redirect('/things-to-do');
     }
 
     private function renderBrowse(?string $categorySlug, string $heading, string $sub): void
@@ -67,7 +92,7 @@ final class ListingController extends Controller
             'sub' => $sub,
             'listings' => $listings,
             'mapListings' => $mapListings,
-            'categories' => Category::all(),
+            'categories' => Category::publicAll(),
             'filters' => $filters,
             'activeCategory' => $categorySlug,
             'favIds' => $favIds,
@@ -89,6 +114,9 @@ final class ListingController extends Controller
         $listingId = (int) $listing['id'];
         $userId = Auth::id();
         $isOwner = $userId !== null && (int) $listing['user_id'] === $userId;
+        if (Category::isHiddenSlug((string) ($listing['category_slug'] ?? '')) && !$isOwner && !Auth::isAdmin()) {
+            abort(404, 'This listing is not available.');
+        }
         $canSeeMapLocation = $isOwner
             || Auth::isAdmin()
             || ($userId !== null && Booking::hasActivePaidBooking($listingId, $userId));
@@ -124,6 +152,7 @@ final class ListingController extends Controller
             'isFavorited' => $userId !== null && Favorite::exists($userId, $listingId),
             'bookedDates' => Booking::bookedDates($listingId),
             'canSeeMapLocation' => $canSeeMapLocation,
+            'isBookable' => Listing::isBookable($listing),
             'errors' => errors(),
         ]);
     }

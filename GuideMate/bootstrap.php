@@ -22,8 +22,11 @@ $config = require BASE_DIR . '/config/config.php';
 require BASE_DIR . '/app/Core/helpers.php';
 
 \App\Core\App::boot($config);
-\App\Core\Lang::init();
 
-if (!isset($_SESSION['_currency'])) {
-    $_SESSION['_currency'] = 'USD';
-}
+// The web portal is fixed to English and the Philippine Peso — the preferences
+// (multi-language / multi-currency) chooser has been removed. Force these on
+// every request so any older session value can no longer take effect.
+$_SESSION['_locale'] = 'en';
+$_SESSION['_currency'] = 'PHP';
+
+\App\Core\Lang::init();

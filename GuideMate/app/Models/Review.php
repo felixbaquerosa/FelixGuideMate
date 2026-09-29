@@ -84,4 +84,24 @@ final class Review
              ORDER BY r.created_at DESC LIMIT ' . (int) $limit
         );
     }
+
+    /**
+     * Tourist reviews left on listings owned by this provider
+     * (guide, hotel partner, or rental partner).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function forOwner(int $ownerId): array
+    {
+        return Database::all(
+            'SELECT r.*, u.name AS user_name, u.avatar AS user_avatar,
+                    l.title AS listing_title, l.slug AS listing_slug
+             FROM reviews r
+             JOIN users u ON u.id = r.user_id
+             JOIN listings l ON l.id = r.listing_id
+             WHERE l.user_id = ?
+             ORDER BY r.created_at DESC',
+            [$ownerId]
+        );
+    }
 }

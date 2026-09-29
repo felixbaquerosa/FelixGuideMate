@@ -1,6 +1,19 @@
 <?php
-/** @var array<string,mixed> $user @var array<string,string> $errors */
+/**
+ * @var array<string,mixed> $user
+ * @var array<string,string> $errors
+ * @var array<int,array<string,mixed>> $documents
+ */
 $errors = $errors ?? [];
+$documents = $documents ?? [];
+$isGuide = \App\Models\User::isProviderRole((string) ($user['role'] ?? ''));
+$guideStatus = (string) ($user['guide_status'] ?? 'none');
+$isVerified = $guideStatus === 'approved';
+$verifyBadge = [
+    'approved' => ['cls' => 'pill-confirmed', 'label' => '✅ Verified'],
+    'pending' => ['cls' => 'pill-pending', 'label' => '⏳ Under review'],
+    'rejected' => ['cls' => 'pill-cancelled', 'label' => '⚠️ Not approved'],
+][$guideStatus] ?? ['cls' => 'pill-pending', 'label' => 'ℹ️ Not submitted'];
 ?>
 <div class="container">
     <div class="dash-layout">
@@ -52,6 +65,46 @@ $errors = $errors ?? [];
                     </form>
                 </div>
             </div>
+
+            <?php if ($isGuide): ?>
+                <div class="panel" style="max-width:640px;margin-top:1.5rem;">
+                    <div class="panel-head" style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;">
+                        <h3 style="margin:0;">Verification &amp; documents</h3>
+                        <span class="pill <?= $verifyBadge['cls'] ?>"><?= e($verifyBadge['label']) ?></span>
+                    </div>
+                    <div class="panel-body">
+                        <?php if ($isVerified): ?>
+                            <p class="hint" style="margin-top:0;">These documents were reviewed and verified by our admin team.</p>
+                        <?php elseif ($guideStatus === 'pending'): ?>
+                            <p class="hint" style="margin-top:0;">Your documents are being reviewed by our admin team.</p>
+                        <?php else: ?>
+                            <p class="hint" style="margin-top:0;">Submit your documents to become a verified guide.</p>
+                        <?php endif; ?>
+
+                        <?php if ($documents === []): ?>
+                            <p class="hint mb-0">No documents on file yet.</p>
+                        <?php else: ?>
+                            <ul class="doc-list">
+                                <?php foreach ($documents as $d): ?>
+                                    <li>
+                                        <span class="doc-type"><?= e(\App\Models\GuideDocument::typeLabel($d['doc_type'])) ?></span>
+                                        <a href="<?= e(url($d['file_path'])) ?>" target="_blank" rel="noopener" class="doc-link">📎 <?= e($d['label'] ?: basename($d['file_path'])) ?> ↗</a>
+                                        <?php if ($isVerified): ?>
+                                            <span class="pill pill-confirmed" style="margin-left:.5rem;">✓ Verified</span>
+                                        <?php elseif ($guideStatus === 'pending'): ?>
+                                            <span class="pill pill-pending" style="margin-left:.5rem;">Pending</span>
+                                        <?php endif; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+
+                        <a href="<?= e(url('/dashboard/verification')) ?>" class="btn btn-ghost" style="margin-top:1rem;">
+                            <?= $isVerified ? 'Manage documents' : 'Submit / update documents' ?>
+                        </a>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 </div>

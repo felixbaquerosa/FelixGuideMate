@@ -8,6 +8,7 @@ use App\Core\ApiAuth;
 use App\Core\Auth;
 use App\Core\Controller;
 use App\Core\Database;
+use App\Core\Geo;
 use App\Core\Translator;
 use App\Core\Upload;
 use RuntimeException;
@@ -23,11 +24,13 @@ use App\Core\App;
 use App\Models\Message;
 use App\Models\PasswordReset;
 use App\Models\Payment;
+use App\Models\PromoCode;
 use App\Models\RentalRequest;
 use App\Models\Review;
 use App\Models\ReviewImage;
 use App\Models\User;
 use App\Services\NotificationService;
+use App\Services\OAuthPending;
 use App\Services\RecommendationService;
 
 final class ApiController extends Controller
@@ -54,12 +57,16 @@ final class ApiController extends Controller
     {
         $userId = ApiAuth::id();
         $this->json([
-            'categories' => array_map([$this, 'categoryPayload'], Category::withCounts()),
+            'categories' => array_map([$this, 'categoryPayload'], Category::withPublicCounts()),
             'featured' => array_map([$this, 'listingPayload'], Listing::featured(8)),
             'recommended' => array_map(
                 [$this, 'listingPayload'],
                 RecommendationService::forUser($userId, 8)
             ),
+            // Total number of published (approved) places. The app compares this
+            // to the value it last saw to show a "new places to explore" banner
+            // when guides publish new tours (after admin approval).
+            'listings_total' => Listing::count('approved'),
             'areas' => [
                 ['slug' => 'cebu-city', 'name' => 'Cebu City', 'tagline' => 'Heritage & food tours'],
                 ['slug' => 'mactan', 'name' => 'Mactan', 'tagline' => 'Island hopping & resorts'],
@@ -73,7 +80,7 @@ final class ApiController extends Controller
     public function categories(): void
     {
         $this->json([
-            'categories' => array_map([$this, 'categoryPayload'], Category::withCounts()),
+            'categories' => array_map([$this, 'categoryPayload'], Category::withPublicCounts()),
         ]);
     }
 
@@ -101,6 +108,10 @@ final class ApiController extends Controller
             $this->json(['error' => 'Listing not found.'], 404);
             return;
         }
+        if (Category::isHiddenSlug((string) ($listing['category_slug'] ?? ''))) {
+            $this->json(['error' => 'Listing not found.'], 404);
+            return;
+        }
 
         $listingId = (int) $listing['id'];
         $reviews = Review::forListing($listingId);
@@ -117,8 +128,18 @@ final class ApiController extends Controller
         // Reviews open once the tourist has a completed (or confirmed) booking.
         $canReview = $userId !== null && !$hasReviewed && Booking::hasCompletedBooking($listingId, $userId);
 
+        $listingPayload = $this->listingPayload($listing, true);
+        // Suggest the closest hotel to this experience (skip if the listing is
+        // itself a hotel) so travelers can plan where to stay nearby.
+        if ((string) ($listing['category_slug'] ?? '') !== 'hotels') {
+            $nearest = $this->nearestHotelPayload($listing);
+            if ($nearest !== null) {
+                $listingPayload['nearest_hotel'] = $nearest;
+            }
+        }
+
         $this->json([
-            'listing' => $this->listingPayload($listing, true),
+            'listing' => $listingPayload,
             'already_booked' => $alreadyBooked,
             'has_reviewed' => $hasReviewed,
             'can_review' => $canReview,
@@ -379,22 +400,37 @@ final class ApiController extends Controller
         $social = App::config('social') ?? [];
         $clientId = (string) (($social['google_web_client_id'] ?? '') ?: ($social['google_client_ids'][0] ?? ''));
         $secret = (string) ($social['google_client_secret'] ?? '');
-        $redirect = (string) ($social['google_redirect'] ?? '');
+        $redirect = $this->googleRegisteredRedirect();
+        $this->wakeGoogleTunnel();
         $return = trim((string) ($_GET['return'] ?? ''));
+        $asJson = (string) ($_GET['format'] ?? '') === 'json'
+            || str_contains((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json');
 
         if ($clientId === '' || $secret === '' || $redirect === '') {
+            if ($asJson) {
+                $this->json(['error' => 'Google sign-in is not configured on the server yet.'], 503);
+                return;
+            }
             $this->socialErrorPage('Google sign-in is not configured on the server yet.');
             return;
         }
         if ($return === '' || !preg_match('#^(exp|guidemate|https?)://#i', $return)) {
+            if ($asJson) {
+                $this->json(['error' => 'Invalid return target.'], 422);
+                return;
+            }
             $this->socialErrorPage('Invalid return target.');
             return;
         }
+
+        $sessionId = bin2hex(random_bytes(16));
+        OAuthPending::put($sessionId, ['status' => 'pending']);
 
         $payload = $this->b64urlEncode((string) json_encode([
             'r' => $return,
             't' => time(),
             'n' => bin2hex(random_bytes(8)),
+            's' => $sessionId,
         ]));
         $sig = $this->b64urlEncode(hash_hmac('sha256', $payload, $secret, true));
         $state = $payload . '.' . $sig;
@@ -410,7 +446,61 @@ final class ApiController extends Controller
             'prompt' => 'select_account',
             'access_type' => 'online',
         ]);
-        header('Location: https://accounts.google.com/o/oauth2/v2/auth?' . $params, true, 302);
+        $authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' . $params;
+
+        if ($asJson) {
+            $this->json([
+                'auth_url' => $authUrl,
+                'session_id' => $sessionId,
+                'redirect_uri' => $redirect,
+            ]);
+            return;
+        }
+        header('Location: ' . $authUrl, true, 302);
+    }
+
+    /**
+     * GET /api/auth/google/pending?session= — phone polls the LAN for the
+     * finished token so login still works if the browser deep-link is lost.
+     */
+    public function googlePending(): void
+    {
+        $sessionId = trim((string) ($_GET['session'] ?? ''));
+        $row = OAuthPending::get($sessionId);
+        if ($row === null) {
+            $this->json(['status' => 'missing'], 404);
+            return;
+        }
+        $this->json([
+            'status' => (string) ($row['status'] ?? 'pending'),
+            'token' => (string) ($row['token'] ?? ''),
+            'error' => (string) ($row['error'] ?? ''),
+        ]);
+    }
+
+    /**
+     * POST /api/auth/google/exchange — the mobile WebView intercepted Google's
+     * redirect (so ngrok never has to be online) and sends us the auth code.
+     */
+    public function googleExchange(): void
+    {
+        $body = $this->jsonBody();
+        $code = trim((string) ($body['code'] ?? ''));
+        $state = trim((string) ($body['state'] ?? ''));
+        $oauthError = trim((string) ($body['oauth_error'] ?? ''));
+        $redirectUri = trim((string) ($body['redirect_uri'] ?? ''));
+
+        $result = $this->redeemGoogleAuth(
+            $code,
+            $state,
+            $oauthError !== '' ? $oauthError : null,
+            $redirectUri !== '' ? $redirectUri : null
+        );
+        if (isset($result['error'])) {
+            $this->json(['error' => (string) $result['error']], 401);
+            return;
+        }
+        $this->json(['token' => (string) $result['token']]);
     }
 
     /**
@@ -421,45 +511,139 @@ final class ApiController extends Controller
     public function googleCallback(): void
     {
         $social = App::config('social') ?? [];
+        $secret = (string) ($social['google_client_secret'] ?? '');
+        $decoded = $this->decodeOAuthState((string) ($_GET['state'] ?? ''), $secret);
+        $return = $decoded !== null ? (string) $decoded['r'] : 'guidemate://auth/google';
+        $sessionId = $decoded !== null ? (string) ($decoded['s'] ?? '') : '';
+
+        $result = $this->redeemGoogleAuth(
+            (string) ($_GET['code'] ?? ''),
+            (string) ($_GET['state'] ?? ''),
+            isset($_GET['error']) ? (string) $_GET['error'] : null
+        );
+        if (isset($result['error'])) {
+            $this->finishOAuth($return, $sessionId, ['error' => (string) $result['error']]);
+            return;
+        }
+        $this->finishOAuth($return, $sessionId, ['token' => (string) $result['token']]);
+    }
+
+    /**
+     * Must match an Authorized redirect URI on the Google Web client.
+     * This project’s Console entry is the static ngrok URL (localhost is not registered).
+     */
+    private function googleRegisteredRedirect(): string
+    {
+        $configured = trim((string) ((App::config('social') ?? [])['google_redirect'] ?? ''));
+        if ($configured !== '') {
+            return $configured;
+        }
+        return 'https://concinnous-unobliging-max.ngrok-free.dev/GuideMate/public/api/auth/google/callback';
+    }
+
+    /**
+     * Kick ngrok in the background so a missed WebView intercept can still
+     * complete on the public callback. Does not block the JSON response.
+     */
+    private function wakeGoogleTunnel(): void
+    {
+        if (PHP_OS_FAMILY !== 'Windows') {
+            return;
+        }
+        $root = dirname(__DIR__, 2);
+        $vbs = $root . DIRECTORY_SEPARATOR . 'start-ngrok-hidden.vbs';
+        $bat = $root . DIRECTORY_SEPARATOR . 'start-ngrok.bat';
+        if (is_file($vbs)) {
+            @pclose(@popen('wscript.exe ' . escapeshellarg($vbs), 'r'));
+            return;
+        }
+        if (is_file($bat)) {
+            @pclose(@popen('cmd.exe /c start "" /MIN ' . escapeshellarg($bat), 'r'));
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function googleRedirectCandidates(?string $preferred = null): array
+    {
+        $candidates = [
+            trim((string) $preferred),
+            $this->googleRegisteredRedirect(),
+            'https://concinnous-unobliging-max.ngrok-free.dev/GuideMate/public/api/auth/google/callback',
+            'http://localhost/GuideMate/public/api/auth/google/callback',
+            'http://127.0.0.1/GuideMate/public/api/auth/google/callback',
+        ];
+        $unique = [];
+        foreach ($candidates as $uri) {
+            if ($uri !== '' && !in_array($uri, $unique, true)) {
+                $unique[] = $uri;
+            }
+        }
+        return $unique;
+    }
+
+    /**
+     * Exchange a Google auth code for a GuideMate session token.
+     *
+     * @return array{token?: string, error?: string}
+     */
+    private function redeemGoogleAuth(string $code, string $state, ?string $oauthError, ?string $preferredRedirect = null): array
+    {
+        $social = App::config('social') ?? [];
         $clientId = (string) (($social['google_web_client_id'] ?? '') ?: ($social['google_client_ids'][0] ?? ''));
         $secret = (string) ($social['google_client_secret'] ?? '');
-        $redirect = (string) ($social['google_redirect'] ?? '');
+        $redirects = $this->googleRedirectCandidates($preferredRedirect);
 
-        $return = $this->verifyState((string) ($_GET['state'] ?? ''), $secret);
-        if ($return === null) {
-            $this->socialErrorPage('Your sign-in link expired. Please try again.');
-            return;
+        $decoded = $this->decodeOAuthState($state, $secret);
+        $sessionId = $decoded !== null ? (string) ($decoded['s'] ?? '') : '';
+
+        if ($oauthError !== null && $oauthError !== '') {
+            $message = $oauthError === 'access_denied' ? 'Google sign-in was cancelled.' : 'Google sign-in was cancelled.';
+            if ($sessionId !== '') {
+                OAuthPending::put($sessionId, ['status' => 'error', 'error' => $message]);
+            }
+            return ['error' => $message];
         }
-        if (isset($_GET['error'])) {
-            $this->redirectToApp($return, ['error' => 'Google sign-in was cancelled.']);
-            return;
+        if ($decoded === null) {
+            return ['error' => 'Your sign-in link expired. Please try again.'];
+        }
+        if ($code === '' || $clientId === '' || $secret === '' || $redirects === []) {
+            $message = 'Google sign-in failed. Please try again.';
+            OAuthPending::put($sessionId, ['status' => 'error', 'error' => $message]);
+            return ['error' => $message];
         }
 
-        $code = (string) ($_GET['code'] ?? '');
-        if ($code === '' || $clientId === '' || $secret === '' || $redirect === '') {
-            $this->redirectToApp($return, ['error' => 'Google sign-in failed. Please try again.']);
-            return;
+        $tokenResp = null;
+        $googleError = '';
+        foreach ($redirects as $redirect) {
+            $attempt = $this->httpPostForm('https://oauth2.googleapis.com/token', [
+                'code' => $code,
+                'client_id' => $clientId,
+                'client_secret' => $secret,
+                'redirect_uri' => $redirect,
+                'grant_type' => 'authorization_code',
+            ]);
+            if (is_array($attempt) && trim((string) ($attempt['id_token'] ?? '')) !== '') {
+                $tokenResp = $attempt;
+                break;
+            }
+            if (is_array($attempt)) {
+                $googleError = trim((string) ($attempt['error_description'] ?? $attempt['error'] ?? ''));
+            }
         }
-
-        $tokenResp = $this->httpPostForm('https://oauth2.googleapis.com/token', [
-            'code' => $code,
-            'client_id' => $clientId,
-            'client_secret' => $secret,
-            'redirect_uri' => $redirect,
-            'grant_type' => 'authorization_code',
-        ]);
         $claims = $this->decodeJwtClaims(is_array($tokenResp) ? (string) ($tokenResp['id_token'] ?? '') : '');
         $sub = (string) ($claims['sub'] ?? '');
         $iss = (string) ($claims['iss'] ?? '');
         $aud = (string) ($claims['aud'] ?? '');
         if ($sub === '' || !in_array($iss, ['accounts.google.com', 'https://accounts.google.com'], true) || $aud !== $clientId) {
-            $this->redirectToApp($return, ['error' => 'Could not verify your Google sign-in.']);
-            return;
+            $message = $googleError !== ''
+                ? ('Google sign-in failed: ' . $googleError)
+                : 'Could not verify your Google sign-in.';
+            OAuthPending::put($sessionId, ['status' => 'error', 'error' => $message]);
+            return ['error' => $message];
         }
 
-        // Prefer the id_token claims for the name; if they're missing (Google
-        // doesn't always inline them), fall back to the userinfo endpoint using
-        // the access token — that reliably returns name/given_name/family_name.
         $nameClaim = (string) ($claims['name'] ?? '');
         $givenClaim = (string) ($claims['given_name'] ?? '');
         $familyClaim = (string) ($claims['family_name'] ?? '');
@@ -483,8 +667,9 @@ final class ApiController extends Controller
         $existing = User::findByOAuth('google', $sub);
         if ($existing !== null) {
             if ((int) ($existing['is_active'] ?? 1) === 0) {
-                $this->redirectToApp($return, ['error' => 'This account has been suspended.']);
-                return;
+                $message = 'This account has been suspended.';
+                OAuthPending::put($sessionId, ['status' => 'error', 'error' => $message]);
+                return ['error' => $message];
             }
             $userId = (int) $existing['id'];
             User::renameIfPlaceholder($userId, (string) ($existing['name'] ?? ''), $name);
@@ -493,7 +678,8 @@ final class ApiController extends Controller
         }
 
         $appToken = ApiAuth::issue($userId);
-        $this->redirectToApp($return, ['token' => $appToken]);
+        OAuthPending::put($sessionId, ['status' => 'done', 'token' => $appToken]);
+        return ['token' => $appToken];
     }
 
     /**
@@ -614,8 +800,12 @@ final class ApiController extends Controller
         $this->redirectToApp($return, ['token' => $appToken]);
     }
 
-    /** Validate a signed state token and return the app's return URL. */
-    private function verifyState(string $state, string $secret): ?string
+    /**
+     * Validate a signed state token and return the payload (return URL + session).
+     *
+     * @return array<string, mixed>|null
+     */
+    private function decodeOAuthState(string $state, string $secret): ?array
     {
         if ($secret === '' || !str_contains($state, '.')) {
             return null;
@@ -632,7 +822,31 @@ final class ApiController extends Controller
         if ((int) ($data['t'] ?? 0) < time() - 600) {
             return null; // expired after 10 minutes
         }
-        return (string) $data['r'];
+        return $data;
+    }
+
+    /** Validate a signed state token and return the app's return URL. */
+    private function verifyState(string $state, string $secret): ?string
+    {
+        $data = $this->decodeOAuthState($state, $secret);
+        return $data === null ? null : (string) $data['r'];
+    }
+
+    /**
+     * Store the result for LAN polling, then bounce back into the app.
+     *
+     * @param array<string, string> $params
+     */
+    private function finishOAuth(string $return, string $sessionId, array $params): void
+    {
+        if ($sessionId !== '') {
+            if (!empty($params['token'])) {
+                OAuthPending::put($sessionId, ['status' => 'done', 'token' => $params['token']]);
+            } elseif (!empty($params['error'])) {
+                OAuthPending::put($sessionId, ['status' => 'error', 'error' => $params['error']]);
+            }
+        }
+        $this->redirectToApp($return, $params);
     }
 
     /** Bounce back into the app (its exp:// / guidemate:// return link). */
@@ -982,6 +1196,45 @@ final class ApiController extends Controller
         ]);
     }
 
+    /** GET /api/maps — public Mapbox token for live traffic (no login). */
+    public function mapsConfig(): void
+    {
+        $maps = App::config('maps') ?? [];
+        $this->json([
+            'mapbox_token' => trim((string) ($maps['mapbox_access_token'] ?? '')),
+        ]);
+    }
+
+    /** GET /api/vouchers — Sale tab catalog plus which codes this account already used. */
+    public function vouchers(): void
+    {
+        $userId = ApiAuth::id();
+        $this->json([
+            'vouchers' => PromoCode::catalogForUser($userId),
+        ]);
+    }
+
+    /** POST /api/vouchers/validate — check a code before checkout. */
+    public function validateVoucher(): void
+    {
+        $userId = ApiAuth::id();
+        if ($userId === null) {
+            $this->json(['error' => 'Sign in to redeem a voucher.'], 401);
+            return;
+        }
+
+        $body = $this->jsonBody();
+        $code = strtoupper(trim((string) ($body['code'] ?? '')));
+        $subtotal = max(0, (float) ($body['subtotal'] ?? 0));
+        if ($code === '') {
+            $this->json(['error' => 'Enter a voucher code.'], 422);
+            return;
+        }
+
+        $check = PromoCode::validate($code, $subtotal, $userId);
+        $this->json($check);
+    }
+
     public function createBooking(): void
     {
         $userId = ApiAuth::id();
@@ -1034,7 +1287,21 @@ final class ApiController extends Controller
         }
 
         $price = Listing::effectivePrice($listing);
-        $total = $price * $guests;
+        $subtotal = $price * $guests;
+        $total = $subtotal;
+        $promoId = null;
+        $discount = 0.0;
+        $promoCode = strtoupper(trim((string) ($body['promo_code'] ?? '')));
+        if ($promoCode !== '') {
+            $check = PromoCode::validate($promoCode, $subtotal, $userId);
+            if (!$check['valid'] || $check['id'] === null) {
+                $this->json(['error' => $check['message']], 422);
+                return;
+            }
+            $discount = (float) $check['discount'];
+            $promoId = (int) $check['id'];
+            $total = max(0, $subtotal - $discount);
+        }
 
         // Keep a human-readable note of how the customer paid so it shows in admin.
         $methodLabel = match ($method) {
@@ -1052,10 +1319,28 @@ final class ApiController extends Controller
         $fullNotes = trim($notes === '' ? $paymentNote : ($notes . "\n" . $paymentNote));
 
         $bookingId = Booking::create($listingId, $userId, $date, $guests, $total, $fullNotes, $time !== '' ? $time : null);
+        if ($promoId !== null) {
+            Booking::attachPromo($bookingId, $promoId, $discount);
+            PromoCode::incrementUse($promoId);
+            PromoCode::recordRedemption($userId, $promoCode, $bookingId);
+        }
         Payment::create($bookingId, $total, $method, 'paid');
-        Booking::updateStatus($bookingId, 'confirmed');
+        // Stays pending until the listing owner (guide / hotel) confirms it.
 
-        // Notify the admin/guide so they can process the booking immediately.
+        $customer = User::find($userId);
+        if ($customer !== null && !empty($customer['email'])) {
+            try {
+                NotificationService::bookingAwaitingConfirmation(
+                    (string) $customer['email'],
+                    (string) ($listing['title'] ?? ''),
+                    $date
+                );
+            } catch (\Throwable $e) {
+                // Notifications are best-effort.
+            }
+        }
+
+        // Notify the listing owner (and admins) so they can confirm or decline.
         $this->notifyAdminsOfBooking($listing, $userId, $date, $guests, $total, $methodLabel);
 
         $booking = Booking::find($bookingId);
@@ -1438,8 +1723,18 @@ final class ApiController extends Controller
         ]);
 
         $rental = RentalRequest::find($id);
+        try {
+            NotificationService::rentalAwaitingConfirmation(
+                (string) $user['email'],
+                (string) ($vehicle['name'] ?? 'your rental'),
+                $pickupDate
+            );
+            $this->notifyRentalPartnersOfRequest($user, $vehicle, $pickupDate, (float) ($rental['total_amount'] ?? 0));
+        } catch (\Throwable $e) {
+            // Notifications are best-effort; never block the reservation on them.
+        }
         $this->json([
-            'request' => $rental !== null ? $this->rentalPayload($rental) : ['id' => $id, 'status' => 'approved'],
+            'request' => $rental !== null ? $this->rentalPayload($rental) : ['id' => $id, 'status' => 'pending'],
         ], 201);
     }
 
@@ -1696,7 +1991,12 @@ final class ApiController extends Controller
             'duration' => (string) ($listing['duration'] ?? ''),
             'owner_name' => (string) ($listing['owner_name'] ?? ''),
             'owner_id' => (int) ($listing['user_id'] ?? 0),
+            'owner_role' => (string) ($listing['owner_role'] ?? ''),
             'favorited' => in_array((int) $listing['id'], $this->favoriteIdSet(), true),
+            // Freshly published (within the last 7 days) — the app shows a
+            // "New" badge on these cards so travelers can spot new tours.
+            'is_new' => isset($listing['created_at'])
+                && strtotime((string) $listing['created_at']) >= strtotime('-7 days'),
         ];
 
         if ($detailed) {
@@ -1706,6 +2006,64 @@ final class ApiController extends Controller
         }
 
         return $payload;
+    }
+
+    /**
+     * Build the "nearest hotel" suggestion for an experience: the closest
+     * approved hotel, with straight-line distance and a Google Maps directions
+     * link from the experience to the hotel.
+     *
+     * @param array<string, mixed> $listing
+     * @return array<string, mixed>|null
+     */
+    private function nearestHotelPayload(array $listing): ?array
+    {
+        // Prefer the listing's own stored coordinates; only fall back to
+        // area-based geocoding when they are missing (e.g. older listings).
+        $lat = $listing['latitude'] ?? null;
+        $lng = $listing['longitude'] ?? null;
+        if ($lat !== null && $lat !== '' && $lng !== null && $lng !== '') {
+            $tourLat = (float) $lat;
+            $tourLng = (float) $lng;
+        } else {
+            $coords = Geo::forListing($listing);
+            if ($coords === null) {
+                return null;
+            }
+            $tourLat = $coords['latitude'];
+            $tourLng = $coords['longitude'];
+        }
+
+        $hotel = Listing::nearestHotel(
+            $tourLat,
+            $tourLng,
+            (int) ($listing['id'] ?? 0)
+        );
+        if ($hotel === null) {
+            return null;
+        }
+
+        $hLat = (float) $hotel['latitude'];
+        $hLng = (float) $hotel['longitude'];
+        $directions = 'https://www.google.com/maps/dir/?api=1'
+            . '&origin=' . $tourLat . ',' . $tourLng
+            . '&destination=' . $hLat . ',' . $hLng
+            . '&travelmode=driving';
+
+        return [
+            'id' => (int) $hotel['id'],
+            'title' => (string) $hotel['title'],
+            'slug' => (string) $hotel['slug'],
+            'area' => (string) ($hotel['area'] ?? ''),
+            'address' => (string) ($hotel['address'] ?? ''),
+            'image' => api_img_src((string) ($hotel['cover_image'] ?? ''), 'listing' . $hotel['id']),
+            'price' => Listing::effectivePrice($hotel),
+            'price_unit' => (string) ($hotel['price_unit'] ?? 'night'),
+            'distance_km' => (float) $hotel['distance_km'],
+            'latitude' => $hLat,
+            'longitude' => $hLng,
+            'directions_url' => $directions,
+        ];
     }
 
     /**
@@ -1846,13 +2204,14 @@ final class ApiController extends Controller
                 $recipients[] = ['email' => $owner['email'], 'name' => $owner['name']];
             }
 
-            $subject = 'New paid booking — ' . $title;
-            $body = "{$customerName} booked \"{$title}\".\n\n"
+            $subject = 'New booking awaiting your confirmation — ' . $title;
+            $body = "{$customerName} booked \"{$title}\" and payment was received.\n\n"
                 . "Date: {$date}\n"
                 . "Guests: {$guests}\n"
                 . 'Amount paid: PHP ' . number_format($total, 2) . "\n"
                 . "Payment: {$methodLabel}\n\n"
-                . 'Please review and process this booking in the admin panel.';
+                . "This booking is NOT confirmed yet. Open your dashboard → Bookings and confirm or decline it.\n"
+                . url('/dashboard/bookings');
 
             $seen = [];
             foreach ($recipients as $r) {
@@ -1865,6 +2224,45 @@ final class ApiController extends Controller
             }
         } catch (\Throwable $e) {
             // Notifications are best-effort; never block the booking on them.
+        }
+    }
+
+    /**
+     * Email rental partners that a paid reservation is waiting to be confirmed.
+     *
+     * @param array<string, mixed> $customer
+     * @param array<string, mixed> $vehicle
+     */
+    private function notifyRentalPartnersOfRequest(
+        array $customer,
+        array $vehicle,
+        string $pickupDate,
+        float $total
+    ): void {
+        try {
+            $customerName = (string) ($customer['name'] ?? 'A tourist');
+            $title = (string) ($vehicle['name'] ?? 'a vehicle');
+            $recipients = Database::all(
+                "SELECT email, name FROM users WHERE role IN ('rental_admin', 'admin')"
+            );
+            $subject = 'Confirm this rental — ' . $title;
+            $body = "{$customerName} reserved \"{$title}\" and payment was received.\n\n"
+                . "Pickup: {$pickupDate}\n"
+                . 'Amount paid: PHP ' . number_format($total, 2) . "\n\n"
+                . "This reservation is NOT confirmed yet. Open your dashboard → Rental requests and confirm or decline it.\n"
+                . url('/dashboard/rentals');
+
+            $seen = [];
+            foreach ($recipients as $r) {
+                $email = trim((string) ($r['email'] ?? ''));
+                if ($email === '' || isset($seen[$email])) {
+                    continue;
+                }
+                $seen[$email] = true;
+                NotificationService::adminBookingPlaced($email, $subject, $body);
+            }
+        } catch (\Throwable $e) {
+            // Notifications are best-effort; never block the reservation on them.
         }
     }
 
@@ -1896,6 +2294,15 @@ final class ApiController extends Controller
             'guests' => (int) $booking['guests'],
             'total_amount' => (float) $booking['total_amount'],
             'status' => $status,
+            'status_label' => match ($status) {
+                'pending' => 'Awaiting confirmation',
+                'confirmed' => 'Approved',
+                'completed' => 'Completed',
+                'cancelled' => 'Cancelled',
+                'refunded' => 'Refunded',
+                'disputed' => 'In review',
+                default => ucfirst($status),
+            },
             'area' => (string) ($booking['area'] ?? ''),
             'reviewed' => $reviewed,
             'can_review' => $canReview,

@@ -1,6 +1,5 @@
 <?php
 /** @var string $content */
-$admin = \App\Core\AdminAuth::user();
 $pageTitle = $title ?? 'Admin';
 ?>
 <!DOCTYPE html>
@@ -22,7 +21,6 @@ $pageTitle = $title ?? 'Admin';
             <span class="admin-tag">Admin</span>
         </a>
         <div class="admin-user">
-            <span class="admin-user-name"><?= admin_icon('user', 16) ?><?= e($admin['name'] ?? 'Admin') ?></span>
             <a href="<?= e(url('/')) ?>" target="_blank" class="btn btn-ghost btn-sm" style="color:#fff;border-color:rgba(255,255,255,.25);"><?= admin_icon('external', 15) ?>View site</a>
             <form method="post" action="<?= e(url('/admin/logout')) ?>" style="display:inline;">
                 <?= csrf_field() ?>

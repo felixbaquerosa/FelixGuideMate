@@ -20,19 +20,19 @@
     <div class="container browse-layout">
         <aside class="filters">
             <h3>Filter &amp; sort</h3>
-            <form method="get" action="<?= e(url($activeCategory ? '/' . $activeCategory : '/listings')) ?>">
+            <form method="get" action="<?= e(url($activeCategory ? '/' . $activeCategory : '/listings')) ?>" id="browseFilterForm" novalidate>
                 <div class="filter-group">
-                    <label>Keyword</label>
-                    <input class="input" type="text" name="q" value="<?= e($filters['q']) ?>" placeholder="Search...">
+                    <label for="filter_q">Keyword</label>
+                    <input class="input" id="filter_q" type="text" name="q" value="<?= e($filters['q']) ?>" placeholder="Search...">
                 </div>
                 <div class="filter-group">
-                    <label>Area</label>
-                    <input class="input" type="text" name="area" value="<?= e($filters['area']) ?>" placeholder="e.g. Oslob">
+                    <label for="filter_area">Area</label>
+                    <input class="input" id="filter_area" type="text" name="area" value="<?= e($filters['area']) ?>" placeholder="e.g. Oslob">
                 </div>
                 <?php if ($activeCategory === null): ?>
                 <div class="filter-group">
-                    <label>Category</label>
-                    <select class="input" name="category">
+                    <label for="filter_category">Category</label>
+                    <select class="input" id="filter_category" name="category">
                         <option value="">All categories</option>
                         <?php foreach ($categories as $c): ?>
                             <option value="<?= e($c['slug']) ?>" <?= $filters['category'] === $c['slug'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
@@ -41,16 +41,16 @@
                 </div>
                 <?php endif; ?>
                 <div class="filter-group">
-                    <label>Minimum rating</label>
-                    <select class="input" name="min_rating">
+                    <label for="filter_rating">Minimum rating</label>
+                    <select class="input" id="filter_rating" name="min_rating">
                         <option value="">Any rating</option>
                         <option value="4" <?= $filters['min_rating'] === '4' ? 'selected' : '' ?>>4+ stars</option>
                         <option value="4.5" <?= $filters['min_rating'] === '4.5' ? 'selected' : '' ?>>4.5+ stars</option>
                     </select>
                 </div>
                 <div class="filter-group">
-                    <label>Sort by</label>
-                    <select class="input" name="sort">
+                    <label for="filter_sort">Sort by</label>
+                    <select class="input" id="filter_sort" name="sort">
                         <option value="">Recommended</option>
                         <option value="rating" <?= $filters['sort'] === 'rating' ? 'selected' : '' ?>>Top rated</option>
                         <option value="price_low" <?= $filters['sort'] === 'price_low' ? 'selected' : '' ?>>Price: low to high</option>
@@ -58,6 +58,7 @@
                         <option value="newest" <?= $filters['sort'] === 'newest' ? 'selected' : '' ?>>Newest</option>
                     </select>
                 </div>
+                <p class="form-alert" id="filterError" hidden role="alert">Please fill in at least one filter before applying.</p>
                 <button class="btn btn-primary btn-block" type="submit">Apply filters</button>
             </form>
         </aside>
@@ -110,3 +111,50 @@
         </div>
     </div>
 </section>
+<script>
+(function () {
+    var form = document.getElementById('browseFilterForm');
+    if (!form) { return; }
+
+    var errorBox = document.getElementById('filterError');
+    var fields = form.querySelectorAll('input.input, select.input');
+
+    function filled() {
+        var ok = false;
+        fields.forEach(function (el) {
+            if (String(el.value || '').trim() !== '') { ok = true; }
+        });
+        return ok;
+    }
+
+    function setInvalid(on) {
+        fields.forEach(function (el) {
+            if (on && String(el.value || '').trim() === '') {
+                el.classList.add('is-invalid');
+            } else {
+                el.classList.remove('is-invalid');
+            }
+        });
+        if (errorBox) {
+            errorBox.hidden = !on;
+        }
+    }
+
+    form.addEventListener('submit', function (e) {
+        if (filled()) {
+            setInvalid(false);
+            return;
+        }
+        e.preventDefault();
+        setInvalid(true);
+        if (errorBox) {
+            errorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    });
+
+    fields.forEach(function (el) {
+        el.addEventListener('input', function () { setInvalid(false); });
+        el.addEventListener('change', function () { setInvalid(false); });
+    });
+})();
+</script>

@@ -30,7 +30,7 @@ final class HomeController extends Controller
         $favIds = $userId !== null ? Favorite::idsForUser($userId) : [];
 
         $this->view('home/index', [
-            'categories' => Category::withCounts(),
+            'categories' => Category::withPublicCounts(),
             'featured' => Listing::featured(6),
             'recommended' => RecommendationService::forUser($userId, 6),
             'recommendedTitle' => $userId !== null ? __('home_recommended') : __('home_popular'),

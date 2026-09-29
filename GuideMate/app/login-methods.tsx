@@ -175,14 +175,6 @@ export default function LoginMethodsScreen() {
           onPress={() => handleSocial('google')}
           disabled={!!socialBusy}
         />
-        <Method
-          icon="logo-facebook"
-          title="Continue with Facebook"
-          subtitle="Private — your email is never shared"
-          status={socialBusy === 'facebook' ? '…' : undefined}
-          onPress={() => handleSocial('facebook')}
-          disabled={!!socialBusy}
-        />
 
         {!loggedIn ? (
           <TouchableOpacity

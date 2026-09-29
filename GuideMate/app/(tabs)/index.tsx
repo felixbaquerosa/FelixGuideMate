@@ -18,7 +18,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import FavoriteHeart from '../../components/FavoriteHeart';
 import { EmptyState, RatingPill, SectionHeader } from '../../components/ui';
+import { isHiddenCategorySlug, isHiddenListing } from '../../lib/catalog';
 import { getSession } from '../../lib/authStore';
+import { getSeenPlacesTotal, newPlacesCount, setSeenPlacesTotal } from '../../lib/newListings';
 import { usePreferences } from '../../lib/preferences';
 import { useTheme } from '../../lib/theme';
 import { ApiListing, getHome, HomePayload, resolveImage } from '../../services/api';
@@ -32,7 +34,6 @@ const CATEGORY_STYLE: Record<string, { icon: string; bg: string; color: string }
   'things-to-do': { icon: 'compass', bg: '#FFF2E6', color: '#FF8C00' },
   'tour-guides': { icon: 'people', bg: '#E6F0FA', color: '#3B82F6' },
   hotels: { icon: 'bed', bg: '#FFF9E6', color: '#F59E0B' },
-  restaurants: { icon: 'restaurant', bg: '#E6F7ED', color: '#10B981' },
 };
 
 function categoryStyle(slug: string) {
@@ -43,7 +44,8 @@ const SERVICES: { key: string; label: string; icon: string; color: string; bg: s
   { key: 'attractions', label: 'Attractions', icon: 'ticket', color: '#EC4899', bg: '#FCE7F3' },
   { key: 'car', label: 'Car Rentals', icon: 'car-sport', color: '#3B82F6', bg: '#E0EDFF' },
   { key: 'flights', label: 'Flights', icon: 'airplane', color: '#8B5CF6', bg: '#EDE9FE' },
-  { key: 'esim', label: 'eSIM', icon: 'cellular', color: '#10B981', bg: '#D1FAE5' },
+  { key: 'weather', label: 'Weather', icon: 'partly-sunny', color: '#0EA5E9', bg: '#E0F2FE' },
+  { key: 'traffic', label: 'Traffic', icon: 'car', color: '#F97316', bg: '#FFEDD5' },
 ];
 
 export default function HomeScreen() {
@@ -57,6 +59,8 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [firstName, setFirstName] = useState('');
+  // How many newly published places have appeared since the user last looked.
+  const [newCount, setNewCount] = useState(0);
 
   const load = useCallback(async () => {
     setError('');
@@ -64,12 +68,35 @@ export default function HomeScreen() {
       const [home, session] = await Promise.all([getHome(), getSession()]);
       setData(home);
       setFirstName(session?.fullName?.trim().split(' ')[0] ?? '');
+
+      // Detect new tours published by guides (after admin approval).
+      const total = home.listings_total ?? 0;
+      const seen = await getSeenPlacesTotal();
+      if (seen < 0) {
+        // First run on this device — set the baseline, don't nag about the
+        // whole existing catalog.
+        await setSeenPlacesTotal(total);
+        setNewCount(0);
+      } else {
+        setNewCount(newPlacesCount(total, seen));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load.');
     } finally {
       setLoading(false);
     }
   }, []);
+
+  // Remember the current catalog size as "seen" and hide the banner.
+  const markPlacesSeen = useCallback(async () => {
+    await setSeenPlacesTotal(data?.listings_total ?? 0);
+    setNewCount(0);
+  }, [data]);
+
+  const openNewPlaces = useCallback(async () => {
+    await markPlacesSeen();
+    router.push('/things-to-do');
+  }, [markPlacesSeen, router]);
 
   useFocusEffect(
     useCallback(() => {
@@ -96,7 +123,9 @@ export default function HomeScreen() {
   type GridItem = { key: string; label: string; icon: string; bg: string; color: string; onPress: () => void };
 
   const gridItems: GridItem[] = [
-    ...(data?.categories ?? []).map((category) => {
+    ...(data?.categories ?? [])
+      .filter((category) => !isHiddenCategorySlug(category.slug))
+      .map((category) => {
       const s = categoryStyle(category.slug);
       return {
         key: `c-${category.id}`,
@@ -117,7 +146,8 @@ export default function HomeScreen() {
       onPress: () => {
         if (s.key === 'attractions') return openAttractions();
         if (s.key === 'car') return router.push('/car-rentals');
-        if (s.key === 'esim') return router.push('/esim');
+        if (s.key === 'weather') return router.push('/weather');
+        if (s.key === 'traffic') return router.push('/traffic');
         if (s.key === 'flights') {
           return Alert.alert('Coming Soon', 'Stay tuned! Flight bookings are on the way. ✈️');
         }
@@ -126,8 +156,8 @@ export default function HomeScreen() {
     })),
   ];
 
-  const featured = data?.featured?.length ? data.featured : data?.recommended ?? [];
-  const listings = data?.recommended?.length ? data.recommended : data?.featured ?? [];
+  const featured = (data?.featured?.length ? data.featured : data?.recommended ?? []).filter((item) => !isHiddenListing(item));
+  const listings = (data?.recommended?.length ? data.recommended : data?.featured ?? []).filter((item) => !isHiddenListing(item));
 
   const renderHero = ({ item }: { item: ApiListing }) => (
     <TouchableOpacity
@@ -177,6 +207,12 @@ export default function HomeScreen() {
     >
       <View style={styles.placeImageWrap}>
         <Image source={{ uri: resolveImage(item.image) }} style={styles.placeImage} />
+        {item.is_new ? (
+          <View style={styles.newBadge}>
+            <Ionicons name="sparkles" size={9} color="#FFFFFF" />
+            <Text style={styles.newBadgeText}>NEW</Text>
+          </View>
+        ) : null}
         {item.rating > 0 ? (
           <View style={styles.placeRating}>
             <RatingPill rating={item.rating} count={item.review_count} compact />
@@ -213,8 +249,12 @@ export default function HomeScreen() {
       renderHero={renderHero}
       openExplore={openExplore}
       openAccount={() => router.push('/(tabs)/account')}
+      openMessages={() => router.push('/messages')}
       gridItems={gridItems}
       renderGridItem={renderGridItem}
+      newCount={newCount}
+      onOpenNewPlaces={openNewPlaces}
+      onDismissNewPlaces={markPlacesSeen}
     />
   );
 
@@ -268,8 +308,12 @@ type HomeHeaderProps = {
   renderHero: ({ item }: { item: ApiListing }) => React.ReactElement;
   openExplore: () => void;
   openAccount: () => void;
+  openMessages: () => void;
   gridItems: { key: string; label: string; icon: string; bg: string; color: string; onPress: () => void }[];
   renderGridItem: (item: { key: string; label: string; icon: string; bg: string; color: string; onPress: () => void }) => React.ReactElement;
+  newCount: number;
+  onOpenNewPlaces: () => void;
+  onDismissNewPlaces: () => void;
 };
 
 const HERO_SNAP = HERO_WIDTH + 14;
@@ -340,8 +384,12 @@ function HomeHeader({
   renderHero,
   openExplore,
   openAccount,
+  openMessages,
   gridItems,
   renderGridItem,
+  newCount,
+  onOpenNewPlaces,
+  onDismissNewPlaces,
 }: HomeHeaderProps) {
   return (
     <View style={styles.headerContainer}>
@@ -355,13 +403,26 @@ function HomeHeader({
             <Text style={[styles.locText, { color: colors.text }]}>Cebu, Philippines</Text>
           </View>
         </View>
-        <TouchableOpacity
-          style={[styles.avatarBtn, { backgroundColor: colors.chipBg }]}
-          activeOpacity={0.8}
-          onPress={openAccount}
-        >
-          <Ionicons name="person" size={20} color={colors.primary} />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={[styles.avatarBtn, { backgroundColor: colors.chipBg }]}
+            activeOpacity={0.8}
+            onPress={openMessages}
+            accessibilityRole="button"
+            accessibilityLabel="Messages"
+          >
+            <Ionicons name="chatbubble-ellipses" size={20} color={colors.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.avatarBtn, { backgroundColor: colors.chipBg }]}
+            activeOpacity={0.8}
+            onPress={openAccount}
+            accessibilityRole="button"
+            accessibilityLabel="Account"
+          >
+            <Ionicons name="person" size={20} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <TouchableOpacity
@@ -375,6 +436,33 @@ function HomeHeader({
           <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
         </View>
       </TouchableOpacity>
+
+      {newCount > 0 ? (
+        <TouchableOpacity
+          style={[styles.newBanner, { backgroundColor: colors.primary }, shadow.sm]}
+          activeOpacity={0.9}
+          onPress={onOpenNewPlaces}
+        >
+          <View style={styles.newBannerIcon}>
+            <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.newBannerTitle} numberOfLines={1}>
+              {newCount} new {newCount > 1 ? 'places' : 'place'} to explore!
+            </Text>
+            <Text style={styles.newBannerSub} numberOfLines={1}>
+              Guides just added new tours — tap to see them.
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={onDismissNewPlaces}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.newBannerClose}
+          >
+            <Ionicons name="close" size={18} color="rgba(255,255,255,0.9)" />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      ) : null}
 
       {featured.length > 0 ? (
         <View style={styles.featuredSection}>
@@ -401,6 +489,7 @@ const styles = StyleSheet.create({
   locRow: { flexDirection: 'row', alignItems: 'center', marginTop: 3 },
   locText: { fontSize: 19, fontWeight: '800', marginLeft: 4, letterSpacing: -0.4 },
   avatarBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 
   searchBar: {
     flexDirection: 'row',
@@ -414,6 +503,23 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 15, padding: 0, marginLeft: 8 },
   searchGo: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+
+  newBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 24,
+    gap: 10,
+  },
+  newBannerIcon: {
+    width: 38, height: 38, borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  newBannerTitle: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', letterSpacing: -0.2 },
+  newBannerSub: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '600', marginTop: 1 },
+  newBannerClose: { padding: 2 },
 
   featuredSection: { marginBottom: 24 },
   heroCard: { height: 200, borderRadius: 22, overflow: 'hidden', backgroundColor: '#00000011' },
@@ -456,6 +562,13 @@ const styles = StyleSheet.create({
   placeImage: { width: '100%', height: '100%', resizeMode: 'cover', backgroundColor: '#00000011' },
   placeRating: { position: 'absolute', top: 8, left: 8 },
   placeHeart: { position: 'absolute', top: 8, right: 8 },
+  newBadge: {
+    position: 'absolute', top: 8, left: 8, zIndex: 2,
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#22C55E',
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 999,
+  },
+  newBadgeText: { color: '#FFFFFF', fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
   placeBody: { padding: 10 },
   placeAreaRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3 },
   placeArea: { fontSize: 11, fontWeight: '600', marginLeft: 3, flex: 1 },

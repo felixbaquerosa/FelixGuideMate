@@ -32,7 +32,7 @@ $warningNote = $warningNote ?? '';
                             <thead><tr><th><?= e(__('th_customer', 'Customer')) ?></th><th><?= e(__('th_listing', 'Listing')) ?></th><th><?= e(__('th_date', 'Date')) ?></th><th><?= e(__('g_guests', 'Guests')) ?></th><th><?= e(__('th_total', 'Total')) ?></th><th><?= e(__('g_payment', 'Payment')) ?></th><th><?= e(__('th_status', 'Status')) ?></th><th><?= e(__('d_action', 'Action')) ?></th></tr></thead>
                             <tbody>
                             <?php foreach ($bookings as $b): ?>
-                                <tr>
+                                <tr<?= $b['status'] === 'pending' ? ' style="background:#FEF3C7;"' : '' ?>>
                                     <td><?= e($b['customer_name']) ?></td>
                                     <td><a href="<?= e(url('/listing/' . $b['listing_slug'])) ?>"><?= e($b['listing_title']) ?></a></td>
                                     <td><?= e(loc_date((string) $b['booking_date'])) ?></td>
@@ -48,7 +48,7 @@ $warningNote = $warningNote ?? '';
                                                 <?= csrf_field() ?>
                                                 <select name="status" class="input guide-status-select" style="padding:.3rem .5rem;width:auto;display:inline-block;">
                                                     <?php if ($b['status'] === 'pending'): ?><option value="confirmed"><?= e(__('g_confirm', 'Confirm')) ?></option><?php endif; ?>
-                                                    <option value="completed"><?= e(__('g_complete', 'Complete')) ?></option>
+                                                    <?php if ($b['status'] === 'confirmed'): ?><option value="completed"><?= e(__('g_complete', 'Complete')) ?></option><?php endif; ?>
                                                     <option value="cancelled"><?= e(__('booking_cancel', 'Cancel')) ?></option>
                                                 </select>
                                                 <button class="btn btn-ghost btn-sm" type="submit"><?= e(__('g_go', 'Go')) ?></button>

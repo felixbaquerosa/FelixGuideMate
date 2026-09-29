@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { useColorScheme } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as SystemUI from 'expo-system-ui';
+import { NavigationBar } from 'expo-navigation-bar';
 import { restoreSession } from '../lib/authStore';
 import { PreferencesProvider } from '../lib/preferences';
 
@@ -24,6 +25,12 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <PreferencesProvider>
+        {/* Immersive full screen: hide the Android on-screen navigation bar
+            (back/home/recents). A swipe from the edge reveals it briefly, then
+            it auto-hides again (behavior set in the app.json config plugin).
+            No-op on iOS/web. */}
+        <NavigationBar hidden />
+
         {/* Global status bar: keeps the phone's clock/battery icons visible on
             every screen (auto-picks dark icons in light mode, light in dark). */}
         <StatusBar style="auto" translucent />
@@ -37,6 +44,7 @@ export default function RootLayout() {
 
         {/* Catches the Google/Facebook backend OAuth redirect (deep link) */}
         <Stack.Screen name="auth/[provider]" />
+        <Stack.Screen name="auth/google-signin" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
 
         {/* 3. Map the main dashboard tab group entry point layout */}
         <Stack.Screen name="(tabs)" />
@@ -68,9 +76,10 @@ export default function RootLayout() {
         <Stack.Screen name="chat/[id]" />
         <Stack.Screen name="call/[id]" options={{ presentation: 'fullScreenModal' }} />
 
-        {/* 9. Travel services: vehicle rentals + eSIM */}
+        {/* 9. Travel services: vehicle rentals, weather, live traffic */}
         <Stack.Screen name="car-rentals" />
-        <Stack.Screen name="esim" />
+        <Stack.Screen name="weather" />
+        <Stack.Screen name="traffic" />
 
         {/* 10. Emergency SOS */}
         <Stack.Screen name="sos" />

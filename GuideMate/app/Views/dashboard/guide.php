@@ -75,7 +75,12 @@ $jsonFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APO
             <?php if ($isVerified): ?>
             <div class="stat-grid" style="margin-top:1rem;">
                 <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('star', 18) ?></span><div class="label"><?= e(__('d_stat_avg_rating', 'Avg rating')) ?></div><div class="value"><?= e((string) ($guideStats['avg_rating'] ?? 0)) ?></div></div>
-                <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('feedback', 18) ?></span><div class="label"><?= e(__('d_stat_reviews', 'Reviews')) ?></div><div class="value"><?= (int) ($guideStats['review_count'] ?? 0) ?></div></div>
+                <a href="<?= e(url('/dashboard/reviews')) ?>" class="stat stat-ico-card stat-clickable">
+                    <span class="stat-ico"><?= admin_icon('feedback', 18) ?></span>
+                    <div class="label"><?= e(__('d_stat_reviews', 'Reviews')) ?></div>
+                    <div class="value"><?= (int) ($guideStats['review_count'] ?? 0) ?></div>
+                    <div class="stat-action"><?= e(__('d_see_reviews', 'See comments')) ?> →</div>
+                </a>
                 <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('check-circle', 18) ?></span><div class="label"><?= e(__('d_stat_completed', 'Completed tours')) ?></div><div class="value"><?= (int) ($guideStats['completed'] ?? 0) ?></div></div>
                 <div class="stat stat-ico-card"><span class="stat-ico"><?= admin_icon('trend', 18) ?></span><div class="label"><?= e(__('d_stat_completion', 'Completion rate')) ?></div><div class="value"><?= e((string) ($guideStats['conversion'] ?? 0)) ?>%</div></div>
             </div>

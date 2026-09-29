@@ -19,7 +19,25 @@ final class AuthController extends Controller
 
     public function showLogin(): void
     {
-        $this->view('auth/login', ['title' => 'Log in', 'errors' => errors()], 'auth');
+        $this->view('auth/login', [
+            'title' => 'Log in',
+            'errors' => errors(),
+            // Carry a safe "return to" path so users land back where they were
+            // (e.g. a listing page) after signing in.
+            'redirect' => self::safeRedirect((string) $this->input('redirect', '')),
+        ], 'auth');
+    }
+
+    /**
+     * Only allow same-site relative paths as post-login redirects, to avoid
+     * open-redirect attacks. Returns '' when the value is unsafe/empty.
+     */
+    private static function safeRedirect(string $path): string
+    {
+        if ($path === '' || $path[0] !== '/' || str_starts_with($path, '//')) {
+            return '';
+        }
+        return $path;
     }
 
     public function login(): void
@@ -56,7 +74,8 @@ final class AuthController extends Controller
         }
 
         flash('success', 'Welcome back!');
-        redirect('/dashboard');
+        $redirect = self::safeRedirect((string) $this->input('redirect', ''));
+        redirect($redirect !== '' ? $redirect : '/dashboard');
     }
 
     public function showRegister(): void
@@ -142,7 +161,7 @@ final class AuthController extends Controller
     {
         $this->verifyCsrf();
         Auth::logout();
-        flash('info', 'You have been logged out.');
+        flash('success', 'You have been logged out successfully.');
         redirect('/');
     }
 

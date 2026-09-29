@@ -10,8 +10,13 @@ $me = (int) auth_user()['id'];
 $folder = $folder ?? 'inbox';
 $isArchived = $folder === 'archived';
 $convBase = $isArchived ? '/messages/archived/' : '/messages/';
+// Providers (guides, rental & hotel admins) get the dashboard sidebar here too,
+// so navigating to Messages doesn't lose the dashboard navigation.
+$msgUser = auth_user();
+$showDashNav = $msgUser !== null && \App\Models\User::isProviderRole((string) ($msgUser['role'] ?? ''));
 ?>
 <div class="container">
+    <?php if ($showDashNav): ?><div class="msg-shell"><?= \App\Core\View::partial('partials/dash-nav') ?><?php endif; ?>
     <div class="msg-layout">
         <div class="conv-list">
             <div class="conv-list-head">
@@ -103,4 +108,5 @@ $convBase = $isArchived ? '/messages/archived/' : '/messages/';
             <?php endif; ?>
         </div>
     </div>
+    <?php if ($showDashNav): ?></div><?php endif; ?>
 </div>

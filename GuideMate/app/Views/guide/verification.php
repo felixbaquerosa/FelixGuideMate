@@ -19,7 +19,7 @@ $banner = [
     <div class="dash-layout">
         <?= \App\Core\View::partial('partials/dash-nav') ?>
         <div>
-            <h1 style="margin-bottom:1rem;"><?= e(__('g_guide_verification', 'Guide verification')) ?></h1>
+            <h1 style="margin-bottom:1rem;"><?= e($heading ?? __('g_guide_verification', 'Guide verification')) ?></h1>
 
             <div class="status-banner <?= $banner['cls'] ?>">
                 <?php if ($banner['icon'] !== ''): ?><span class="status-icon"><?= $banner['icon'] ?></span><?php endif; ?>
